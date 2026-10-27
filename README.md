@@ -235,7 +235,17 @@ iCloud, Fastmail, Yahoo, and most others with 2FA).
 | Zoho Mail | `imap.zoho.com` | 993 | `true` | App-specific password with 2FA |
 | GMX | `imap.gmx.com` | 993 | `true` | |
 | AOL Mail | `imap.aol.com` | 993 | `true` | |
+| Yandex Mail | `imap.yandex.com` | 993 | `true` | Create an app password in the Yandex ID settings |
+| Mail.ru | `imap.mail.ru` | 993 | `true` | App password required |
+| QQ Mail | `imap.qq.com` | 993 | `true` | Enable IMAP and create an authorisation code (授权码) in the web settings; use that code as `password` |
+| 163 / 126 Mail | `imap.163.com` | 993 | `true` | Enable IMAP and set a client authorisation password (客户端授权密码) |
+| Sina Mail | `imap.sina.com` | 993 | `true` | Enable IMAP in the web settings |
 | Dovecot / self-hosted | your server | 993 | `true` | `tls_verify = false` only for self-signed certs |
+
+Every provider in this table accepts a normal password or an app password, so
+`auth = "password"` (the default) works and the OAuth2 setup below is only
+needed for Outlook/Microsoft 365 and for Gmail accounts that cannot enable
+2FA.
 
 ### Providers that require OAuth2
 
