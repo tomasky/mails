@@ -1,0 +1,299 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "kupas/mails"
+
+import {
+  "moonbitlang/core/ref",
+}
+
+// Values
+pub fn action_env(ActionContext) -> Map[String, String]
+
+pub fn base64_decode(String) -> Bytes raise MailsError
+
+pub fn base64_encode(Bytes) -> String
+
+pub fn build_message(String, String, Int32, Bytes, Bytes) -> MailMessage
+
+pub fn bytes_concat(ArrayView[Bytes]) -> Bytes
+
+pub fn bytes_to_string_lossy(Bytes) -> String
+
+pub fn collapse_whitespace(String) -> String
+
+pub let config_file_name : String
+
+pub fn decode_charset(Bytes, String) -> String
+
+pub fn decode_encoded_words(String) -> String
+
+pub fn decode_modified_utf7(String) -> String
+
+pub async fn default_config_path() -> String raise MailsError
+
+pub fn default_defaults() -> Defaults
+
+pub let default_key_env : String
+
+pub fn error_message(Error) -> String
+
+pub async fn executable_dir() -> String raise MailsError
+
+pub fn format_duration(Int32) -> String
+
+pub async fn generate_key_spec() -> String raise MailsError
+
+pub fn imap_quote(String) -> String
+
+pub fn is_blank(String) -> Bool
+
+pub fn is_sealed(String) -> Bool
+
+pub fn key_uses_passphrase(String) -> Bool raise MailsError
+
+pub async fn load_config(String) -> Config raise MailsError
+
+pub async fn load_env_file(String) -> EnvFile raise MailsError
+
+pub fn log_debug(String) -> Unit
+
+pub fn log_error(String) -> Unit
+
+pub fn log_info(String) -> Unit
+
+pub let log_level : @ref.Ref[LogLevel]
+
+pub fn log_warn(String) -> Unit
+
+pub fn mails_error(String) -> MailsError
+
+pub async fn main_cli() -> Bool
+
+pub fn match_rule(Rule, MailMessage) -> RuleMatch?
+
+pub fn match_rules(Array[Rule], String, String, MailMessage) -> Array[RuleMatch]
+
+pub fn message_body_text(Bytes) -> String
+
+pub fn message_body_text_with_headers(Array[(String, String)], Bytes) -> String
+
+pub fn needs_key(String) -> Bool
+
+pub fn open_secret(String, String) -> String raise MailsError
+
+pub fn parse_config(String, String) -> Config raise MailsError
+
+pub fn parse_content_type(String) -> (String, Array[(String, String)])
+
+pub fn parse_duration_ms(String) -> Int32?
+
+pub fn parse_headers(String) -> Array[(String, String)]
+
+pub fn parse_match_field(String) -> MatchField?
+
+pub fn render_env_for_display(EnvFile, Bool) -> String
+
+pub fn render_template(String, ActionContext) -> String
+
+pub fn resolve_secret(String, String) -> String raise MailsError
+
+pub fn rule_applies(Rule, String, String) -> Bool
+
+pub async fn run_action(String, String, MailMessage, RuleMatch) -> ActionOutcome
+
+pub async fn run_watch(Config, Array[Account], String, Bool) -> Unit
+
+pub fn sample_config() -> String
+
+pub async fn seal_secret(String, String) -> String raise MailsError
+
+pub fn selected_accounts(Config, String?) -> Array[Account] raise MailsError
+
+pub async fn set_env_var(String, String, String) -> Unit raise MailsError
+
+pub fn set_log_level(LogLevel) -> Unit
+
+pub fn shell_quote(String) -> String
+
+pub fn split_header_body(String) -> (Array[(String, String)], String)
+
+pub fn string_to_bytes(String) -> Bytes
+
+pub fn trim(StringView) -> String
+
+pub fn truncate_chars(String, Int32) -> String
+
+pub fn update_account_password(String, String, String) -> String raise MailsError
+
+// Errors
+pub suberror IdleUnsupported
+
+pub suberror ImapProtocolError {
+  ImapProtocolError(String)
+}
+
+pub suberror MailsError {
+  MailsError(String)
+}
+
+// Types and methods
+pub struct Account {
+  name : String
+  host : String
+  port : Int32
+  username : String
+  password : String
+  use_tls : Bool
+  tls_verify : Bool
+  mailboxes : Array[String]
+  rules : Array[Rule]
+  startup_sync : Bool
+  idle_timeout_ms : Int32
+  reconnect_ms : Int32
+  max_body_bytes : Int32
+}
+
+pub struct ActionContext {
+  account : String
+  mailbox : String
+  message : MailMessage
+  rule : Rule
+  keywords : Array[String]
+}
+
+pub struct ActionOutcome {
+  exit_code : Int32
+  timed_out : Bool
+}
+
+pub struct Config {
+  path : String
+  dir : String
+  env_file : String
+  key_env : String
+  defaults : Defaults
+  rules : Array[Rule]
+  accounts : Array[Account]
+}
+
+pub struct Defaults {
+  startup_sync : Bool
+  idle_timeout_ms : Int32
+  reconnect_ms : Int32
+  max_body_bytes : Int32
+  command_timeout_ms : Int32
+  body_chars : Int32
+}
+
+pub struct EnvFile {
+  path : String
+  keys : Array[String]
+  values : Array[String]
+}
+pub fn EnvFile::get(Self, String) -> String?
+
+pub struct FetchedMessage {
+  uid : String
+  size : Int32
+  header : Bytes
+  body : Bytes
+}
+
+pub struct ImapClient {
+  stream : ImapStream
+  host : String
+  mut tag_counter : Int32
+  mut capabilities : Array[String]
+}
+pub async fn ImapClient::check(Self, String) -> MailboxStatus
+pub async fn ImapClient::close(Self) -> Unit
+pub async fn ImapClient::connect(String, Int32, Bool, Bool, String, String) -> Self
+pub async fn ImapClient::fetch_message(Self, String, Int32) -> FetchedMessage?
+pub fn ImapClient::has_capability(Self, String) -> Bool
+pub async fn ImapClient::idle(Self, Int32) -> Bool
+pub async fn ImapClient::search_uids(Self, Int32) -> Array[String]
+pub async fn ImapClient::select_mailbox(Self, String) -> MailboxStatus
+
+pub struct ImapReply {
+  lines : Array[LogicalLine]
+  status : String
+  text : String
+}
+
+type ImapStream
+
+pub enum LogLevel {
+  Warn
+  Info
+  Debug
+}
+
+pub struct LogicalLine {
+  text : String
+  prefixes : Array[String]
+  literals : Array[Bytes]
+}
+
+pub struct MailMessage {
+  uid : String
+  mailbox : String
+  subject : String
+  from : String
+  to : String
+  date : String
+  message_id : String
+  body : String
+  raw_bytes : Int32
+}
+
+pub struct MailboxStatus {
+  exists : Int32
+  uid_validity : Int32
+  uid_next : Int32
+}
+
+pub enum MatchField {
+  Subject
+  Body
+  From
+  To
+}
+pub fn MatchField::as_string(Self) -> String
+
+pub struct MimeText {
+  mut plain : String
+  mut html : String
+}
+
+pub struct Rule {
+  name : String
+  accounts : Array[String]
+  mailboxes : Array[String]
+  fields : Array[MatchField]
+  keywords : Array[String]
+  require_all : Bool
+  ignore_case : Bool
+  regex : Bool
+  shell_command : String
+  argv : Array[String]
+  timeout_ms : Int32
+  workdir : String
+  body_chars : Int32
+}
+
+pub struct RuleMatch {
+  rule : Rule
+  keywords : Array[String]
+  fields : Array[String]
+}
+
+pub struct Runtime {
+  account : Account
+  rules : Array[Rule]
+  password : String
+  once : Bool
+  failed : @ref.Ref[Bool]
+}
+
+// Type aliases
+
+// Traits

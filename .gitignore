@@ -1,0 +1,12 @@
+.DS_Store
+_build/
+target/
+target
+.mooncakes/
+.moonagent/
+dist/
+# Local configuration and the encryption key must never be committed.
+mails.toml
+.env
+.env.*
+!.env.example

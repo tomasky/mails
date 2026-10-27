@@ -1,0 +1,200 @@
+name: Release
+
+# Tagging is the trigger: `git tag v0.1.1 && git push origin v0.1.1`.
+# `workflow_dispatch` re-cuts a release without moving a tag.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish, e.g. v0.1.1 (defaults to the ref name)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # One native build per target. MoonBit's native backend goes through the
+  # system C compiler, so each target is built on its own runner rather than
+  # cross-compiled.
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux binaries are linked fully statically against musl so they
+          # run on any distribution regardless of its glibc version. A glibc
+          # build would bake in the runner's symbol versions and refuse to
+          # start on older systems ("GLIBC_2.38 not found").
+          - runner: ubuntu-latest
+            target: linux-x86_64
+            musl: true
+          # GitHub's arm64 Linux runners are only available to public
+          # repositories. Remove this entry if that is a problem.
+          - runner: ubuntu-24.04-arm
+            target: linux-aarch64
+            musl: true
+          - runner: macos-15
+            target: darwin-aarch64
+            musl: false
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Show toolchain
+        run: moon version --all
+
+      - name: Install musl toolchain
+        if: matrix.musl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      # A fresh runner has an empty registry index, so dependencies
+      # (moonbitlang/x, moonbitlang/async, ...) cannot be resolved until the
+      # index is fetched.
+      - name: Update registry index
+        run: moon update
+
+      - name: Build (static, release)
+        if: matrix.musl
+        run: ./scripts/build-linux-static.sh "dist/mails-${{ matrix.target }}"
+
+      - name: Build (release)
+        if: ${{ !matrix.musl }}
+        run: |
+          moon build --target native --release
+          mkdir -p dist
+          cp _build/native/release/build/cmd/mails/mails.exe "dist/mails-${{ matrix.target }}"
+          chmod 755 "dist/mails-${{ matrix.target }}"
+
+      # Only two assets per target: the binary and its checksum. Both the
+      # npm launcher and install.sh fetch the bare asset and set the mode
+      # themselves, so an archive would be a third thing to keep in sync and
+      # nothing would read it. GitHub already offers "Source code (tar.gz)"
+      # for anyone who wants an archive of the tag.
+      - name: Stage assets
+        run: |
+          set -eu
+          asset="mails-${{ matrix.target }}"
+          file "dist/$asset" || true
+          (cd dist && shasum -a 256 "$asset" > "$asset.sha256" 2>/dev/null \
+            || sha256sum "$asset" > "$asset.sha256")
+          ls -l dist
+
+      - name: Smoke test
+        run: |
+          set -eu
+          "./dist/mails-${{ matrix.target }}" version
+          "./dist/mails-${{ matrix.target }}" help >/dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mails-${{ matrix.target }}
+          path: |
+            dist/mails-${{ matrix.target }}
+            dist/mails-${{ matrix.target }}.sha256
+          if-no-files-found: error
+
+  release:
+    name: publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List assets
+        run: ls -l dist
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          set -eu
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' moon.mod)"
+          fi
+          case "$TAG" in v*) ;; *) TAG="v$TAG" ;; esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Check source versions match the tag
+        run: |
+          set -eu
+          WANT="${{ steps.tag.outputs.tag }}"
+          WANT="${WANT#v}"
+          MOD=$(sed -n 's/^version *= *"\(.*\)"/\1/p' moon.mod)
+          CLI=$(sed -n 's/.*let cli_version : String = "\(.*\)"/\1/p' cli.mbt)
+          if [ "$WANT" != "$MOD" ] || [ "$WANT" != "$CLI" ]; then
+            echo "::error::tag is $WANT but moon.mod is $MOD and cli.mbt is $CLI"
+            exit 1
+          fi
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          files: dist/*
+
+  # The npm package is a launcher, not a bundle: it downloads the matching
+  # release asset on first run. Publishing after the release job guarantees the
+  # asset exists before the first user pulls it.
+  npm:
+    name: publish @tomasko/mails
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Check the package version matches the release
+        working-directory: npmjs
+        run: |
+          set -eu
+          WANT="${{ needs.release.outputs.tag }}"
+          WANT="${WANT#v}"
+          HAVE="$(node -p "require('./package.json').version")"
+          if [ "$WANT" != "$HAVE" ]; then
+            echo "::error::npmjs/package.json is $HAVE but the release tag is $WANT"
+            exit 1
+          fi
+
+      - name: Publish
+        working-directory: npmjs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "NPM_TOKEN is not configured; skipping the npm publish."
+            exit 0
+          fi
+          npm publish --access public --provenance

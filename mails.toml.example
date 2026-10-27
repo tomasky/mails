@@ -1,0 +1,67 @@
+# Example mails configuration.
+#
+# Copy this file next to the mails binary as `mails.toml`, then run:
+#   mails keygen
+#   mails encrypt --account work --write
+#   mails check
+
+[general]
+# Process mail that already exists when a mailbox is first watched. Leave this
+# false unless you really want to run rules against the whole mailbox.
+startup_sync = false
+# Re-enter IDLE this often; server-side idle limits are typically 30 minutes.
+idle_timeout = "29m"
+# First reconnect delay; doubles up to five minutes.
+reconnect_delay = "30s"
+# Fetch at most this many bytes of each message body.
+max_body_bytes = 262144
+# Default timeout for rule commands.
+command_timeout = "30s"
+# Default truncation for {{body}} / MAILS_BODY.
+body_chars = 4000
+# Encryption key file, relative to this file. Never commit it.
+env_file = ".env"
+key_env = "MAILS_KEY"
+
+[[rules]]
+name = "urgent"
+keywords = ["urgent", "invoice", "payment due"]
+fields = ["subject", "body"]
+match = "any"
+case_sensitive = false
+regex = false
+# Shell string, run with `sh -c`. Use {{subject_q}} or $MAILS_SUBJECT when the
+# subject reaches a shell.
+command = 'notify-send "Mail from {{from}}" "{{subject}}"'
+timeout = "10s"
+# body_chars = 500
+# accounts = ["work"]
+# mailboxes = ["INBOX"]
+
+[[rules]]
+name = "from-boss"
+keyword = "boss@example.com"
+fields = ["from"]
+exec = ["/usr/local/bin/on-boss-mail", "--subject", "{{subject_q}}"]
+
+[accounts.work]
+host = "imap.example.com"
+port = 993
+username = "me@example.com"
+# Written by `mails encrypt --account work --write`.
+password = ""
+mailboxes = ["INBOX"]
+tls = true
+tls_verify = true
+# Per-account overrides of [general]:
+# startup_sync = true
+# idle_timeout = "10m"
+# reconnect_delay = "1m"
+# max_body_bytes = 1048576
+
+# Account-specific rules run after the global ones.
+# [[accounts.work.rules]]
+# name = "deploys"
+# keywords = ["deploy", "rollback"]
+# fields = ["subject"]
+# command = 'logger -t deploys "$MAILS_SUBJECT"'

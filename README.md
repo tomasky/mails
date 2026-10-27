@@ -1,0 +1,471 @@
+# mails
+
+Watch IMAP mailboxes with `IDLE` and run a shell command when a new message
+matches keywords in its subject, body, sender or recipients.
+
+`mails` is a rewrite of [goimapnotify](https://github.com/dsh2dsh/goimapnotify)
+in [MoonBit](https://www.moonbitlang.com), with two things added:
+
+- **Keyword rules.** Instead of running one command for every new message, each
+  message is matched against rules and only matching rules fire. Rules can look
+  at the subject, the decoded text body, the `From` and the `To` headers, and
+  can combine keywords with `match = "any"` or `match = "all"`.
+- **Encrypted passwords.** `mails.toml` never contains the mailbox password in
+  clear text. It stores an AES-256-GCM envelope; the key lives in `.env` next to
+  the binary and never in the config file. `mails encrypt` does the sealing.
+
+Everything is one static binary with no runtime dependencies.
+
+## Highlights
+
+- **Keyword rules, not just "new mail".** Each message is matched against
+  rules that inspect the subject, the decoded text body, `From` and `To`.
+  Keywords can be combined with `match = "any"` or `match = "all"`, compared
+  case-insensitively, or treated as regular expressions. See
+  [Configuration](#configuration).
+- **IMAP IDLE with a polling fallback.** One connection per mailbox. When the
+  server advertises `IDLE`, changes arrive immediately; when it does not, the
+  client polls every minute. See [How watching works](#how-watching-works).
+- **Encrypted passwords.** `mails.toml` stores an AES-256-GCM envelope, never
+  the password. The key lives in `.env` and can be a random 32-byte secret or a
+  PBKDF2-derived passphrase. See [Credentials](#credentials).
+- **A single static binary.** No Node.js, Python or libc version to worry about
+  on Linux: the published binaries are linked against musl statically.
+- **Config beside the binary.** `mails.toml` and `.env` are resolved relative to
+  the `mails` executable, so one directory can be copied to another machine and
+  keep working. There is no global config directory.
+- **Runs anything.** A rule command can be a shell string (`sh -c`) or an argv
+  array, with `{{subject}}`-style placeholders and `MAILS_*` environment
+  variables. See [Placeholders](#placeholders).
+- **Safe defaults.** Messages are fetched with `BODY.PEEK` and never marked as
+  read, commands have a timeout, and `mails check` verifies the config, the key
+  and every IMAP login before you deploy it.
+
+## Install
+
+Native binaries are published for Linux (x86-64 and arm64) and macOS (Apple
+silicon). Every method below produces the same `mails` command.
+
+### npm, pnpm, yarn or bun
+
+```sh
+npm install -g @tomasko/mails
+# pnpm add -g @tomasko/mails
+# yarn global add @tomasko/mails
+# bun add -g @tomasko/mails
+# npx @tomasko/mails version      (run without installing)
+```
+
+The npm package is a launcher, not the binary. On the first `mails` run it
+downloads the matching release asset, verifies its SHA-256 and caches it.
+Nothing is downloaded by `npm install`. The package deliberately declares no
+`postinstall`, so it also works under pnpm 12, with `--ignore-scripts`, and via
+`npx`. See [`npmjs/README.md`](npmjs/README.md) for the launcher's environment
+variables.
+
+With the npm launcher the binary lives in the user cache, so the default
+`mails.toml` would live there too. For a long-lived setup, choose a persistent
+config path once:
+
+```sh
+mkdir -p ~/.config/mails
+export MAILS_CONFIG=~/.config/mails/mails.toml
+mails init
+```
+
+The other install methods put the binary somewhere stable, so the default
+next-to-the-binary config is already persistent.
+
+### MoonBit package registry
+
+```sh
+moon install kupas/mails/cmd/mails
+```
+
+Builds from source with the MoonBit toolchain and installs `mails` into
+`~/.moon/bin` (use `--bin DIR` to change that). This is the path to use if you
+already develop with MoonBit.
+
+### Install script
+
+```sh
+curl -LsSf https://raw.githubusercontent.com/tomasky/mails/master/install.sh | bash
+```
+
+No Node.js or MoonBit required. The script accepts `--version 0.1.1`,
+`--install-dir DIR` and `--no-verify`, and verifies the published SHA-256
+before installing. By default it installs into `~/.local/bin`.
+
+### Prebuilt binary
+
+```sh
+curl -L -o mails \
+  https://github.com/tomasky/mails/releases/latest/download/mails-linux-x86_64
+chmod +x mails
+./mails version
+```
+
+Replace the asset name with the one for your platform:
+
+| Platform | Release asset |
+| --- | --- |
+| Linux x86-64 | `mails-linux-x86_64` (static, musl) |
+| Linux arm64 | `mails-linux-aarch64` (static, musl) |
+| macOS Apple silicon | `mails-darwin-aarch64` |
+
+Each asset has a matching `.sha256` file:
+
+```sh
+curl -L -O https://github.com/tomasky/mails/releases/latest/download/mails-linux-x86_64
+curl -L -O https://github.com/tomasky/mails/releases/latest/download/mails-linux-x86_64.sha256
+sha256sum -c mails-linux-x86_64.sha256
+```
+
+### From source
+
+```sh
+git clone https://github.com/tomasky/mails && cd mails
+moon build --target native --release
+mkdir -p ~/.local/bin
+install -m 755 _build/native/release/build/cmd/mails/mails.exe ~/.local/bin/mails
+```
+
+If `~/.local/bin` is not on `PATH`, add it to your shell profile, or install
+with `moon install`, which uses `~/.moon/bin`.
+
+See [Building](#building) for the static Linux build and tests.
+
+## Releases
+
+Releases are tagged `v<version>` (for example `v0.1.1`). Each release publishes
+one binary per target plus its `.sha256` checksum; there are no archives,
+because the installer, the npm launcher and `curl` all want the bare binary.
+Source archives are provided by GitHub for every tag.
+
+The release workflow builds each target on its own runner — `ubuntu-latest`
+and `ubuntu-24.04-arm` for the musl static binaries, `macos-15` for Apple
+silicon — so no binary inherits another platform's libc. It then publishes the
+GitHub release and, if `NPM_TOKEN` is configured, the matching
+`@tomasko/mails` package.
+
+Every release asset is also published with a `.sha256` checksum, which the
+installer and the npm launcher verify before running the binary.
+
+## Quick start
+
+The configuration file is `mails.toml` in the directory that holds the `mails`
+binary. `mails init` writes a commented starter file there.
+
+```sh
+mails init                 # writes mails.toml next to the binary and prints the path
+$EDITOR /path/printed/by/mails/init/mails.toml
+
+mails keygen               # creates .env with a fresh MAILS_KEY
+mails encrypt --account work --write
+# prompts for the IMAP password, seals it, and edits mails.toml in place
+
+mails check                # verify config, key and logins
+mails watch                # run in the foreground; use a supervisor in production
+```
+
+If you would rather keep the config somewhere else, pass `--config PATH` or set
+`MAILS_CONFIG`. The `.env` file still defaults to the directory of the config
+file, and can be changed with `general.env_file`.
+
+## Configuration
+
+```toml
+[general]
+startup_sync = false        # process existing mail on startup
+idle_timeout = "29m"        # re-enter IDLE this often
+reconnect_delay = "30s"     # first reconnect backoff, doubled up to 5m
+max_body_bytes = 262144     # fetch at most this much of each body
+command_timeout = "30s"     # default rule timeout
+body_chars = 4000           # default {{body}} truncation
+
+env_file = ".env"           # relative to this file
+key_env = "MAILS_KEY"       # variable holding the encryption key
+
+[[rules]]
+name = "invoice"
+keywords = ["invoice", "payment due"]
+fields = ["subject", "body"]
+match = "any"               # "any" (default) or "all"
+case_sensitive = false      # default false
+regex = false               # treat keywords as MoonBit regexes
+command = 'notify-send "{{subject}}" "{{from}}"'
+
+[[rules]]
+name = "from-boss"
+keyword = "boss@example.com"
+fields = ["from"]
+exec = ["/usr/local/bin/on-boss-mail", "--subject", "{{subject}}"]
+
+[accounts.work]
+host = "imap.example.com"
+port = 993
+username = "me@example.com"
+password = "enc:v1:..."     # written by `mails encrypt`
+mailboxes = ["INBOX", "Work"]
+# tls = true
+# tls_verify = true
+# startup_sync = true
+# idle_timeout = "10m"
+# reconnect_delay = "1m"
+# max_body_bytes = 1048576
+```
+
+Rules can be global (`[[rules]]`) or per account
+(`[[accounts.work.rules]]`). Global rules run first, then the account's rules.
+
+### Rule keys
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `name` | `rule-N` | Name used in logs and `{{rule}}` |
+| `keywords` | required | Array of keywords; each must appear in one of `fields` |
+| `keyword` | – | Single-keyword shorthand |
+| `fields` | `["subject", "body"]` | Any of `subject`, `body`, `from`, `to` |
+| `match` | `"any"` | `any`: one keyword is enough. `all`: every keyword must match |
+| `case_sensitive` | `false` | ASCII/Unicode lowercase comparison |
+| `regex` | `false` | Compile keywords as regexes (`(?i:...)` when case-insensitive) |
+| `command` | – | Shell string, run with `sh -c` |
+| `exec` | – | argv array; the first element is the program |
+| `timeout` | `command_timeout` | Kill the command after this duration |
+| `workdir` | – | Working directory for the command |
+| `body_chars` | `general.body_chars` | Truncate `{{body}}` and `MAILS_BODY` |
+| `accounts` | all | Restrict the rule to these account names |
+| `mailboxes` | all | Restrict the rule to these mailboxes |
+
+`command` and `exec` are mutually exclusive in spirit; if both are set, `exec`
+wins.
+
+### Placeholders
+
+Inside `command` and every `exec` argument:
+
+| Placeholder | Value |
+| --- | --- |
+| `{{account}}`, `{{mailbox}}`, `{{uid}}` | Where the message lives |
+| `{{subject}}`, `{{from}}`, `{{to}}`, `{{date}}`, `{{message_id}}` | Decoded headers |
+| `{{body}}` | Readable text body, truncated to `body_chars` |
+| `{{rule}}`, `{{keywords}}`, `{{fields}}` | Which rule fired and why |
+| `{{*_q}}` | The same value single-quoted for a POSIX shell |
+
+`{{subject}}` is inserted raw, so a subject containing `$(...)` is dangerous in
+a shell command. Use `{{subject_q}}`, or read `$MAILS_SUBJECT`, which is passed
+through the environment and never parsed by a shell:
+
+```toml
+command = 'logger -t mails "$MAILS_SUBJECT"'
+```
+
+The full environment for a rule command:
+
+`MAILS_ACCOUNT`, `MAILS_MAILBOX`, `MAILS_UID`, `MAILS_SUBJECT`, `MAILS_FROM`,
+`MAILS_TO`, `MAILS_DATE`, `MAILS_MESSAGE_ID`, `MAILS_RULE`,
+`MAILS_KEYWORDS`, `MAILS_BODY` (truncated), `MAILS_BODY_FULL`.
+
+## Credentials
+
+The account password in `mails.toml` is either an `enc:v1:` envelope or a plain
+value (if you use a password helper or a dedicated app password that you do not
+mind storing).
+
+```sh
+mails keygen                        # writes MAILS_KEY to .env (mode 0600)
+mails encrypt --account work        # prints the envelope to paste
+mails encrypt --account work --write  # edits mails.toml in place
+mails encrypt --account work --new-key --write  # rotate the key first
+```
+
+The envelope is `enc:v1:<salt>:<nonce>:<ciphertext+tag>`. Two key forms are
+accepted in `.env`:
+
+- `MAILS_KEY=b64:...` — a random 32-byte key (what `keygen` writes), used
+  directly.
+- `MAILS_KEY=pass:correct horse battery staple` — a passphrase; the AES key is
+  derived with PBKDF2-HMAC-SHA256 (100k iterations) and the per-secret salt.
+
+Losing `.env` means the password cannot be recovered; run `mails keygen`
+followed by `mails encrypt --write` again. Keep `.env` out of version control.
+
+`MAILS_KEY` may also be set in the environment, which takes precedence only
+when the `.env` file does not define it.
+
+## Commands
+
+```
+mails <command> [options]
+
+watch       follow mailboxes with IMAP IDLE
+sync        process existing matching mail once, then exit
+check       verify config, key, logins and mailbox counts
+encrypt     seal an account password with the key in .env
+keygen      create or rotate the encryption key in .env
+rules       list configured rules
+env         show .env with secret values masked
+init        write a commented mails.toml next to the binary
+version     print the version
+help        print usage
+```
+
+Options:
+
+| Option | Effect |
+| --- | --- |
+| `-c, --config PATH` | Configuration file (default: `mails.toml` next to the binary) |
+| `-a, --account NAME` | Operate on one account only |
+| `--once` | For `watch`: process existing mail, then exit (same as `sync`) |
+| `--write` | For `encrypt`: update `mails.toml` in place |
+| `--new-key` | For `encrypt`: rotate the key before sealing |
+| `-v, --verbose` | Debug logging |
+| `-q, --quiet` | Warnings and errors only |
+
+## Environment variables
+
+| Variable | Read by | Effect |
+| --- | --- | --- |
+| `MAILS_CONFIG` | `mails` | Config path when `--config` is not passed |
+| `MAILS_KEY` | `mails` | Encryption key fallback when `.env` does not define `general.key_env` |
+| `MAILS_BINARY`, `MAILS_CACHE_DIR`, … | npm launcher | Control the downloaded binary; see [`npmjs/README.md`](npmjs/README.md) |
+
+Rule commands receive their own variables: `MAILS_ACCOUNT`, `MAILS_MAILBOX`,
+`MAILS_UID`, `MAILS_SUBJECT`, `MAILS_FROM`, `MAILS_TO`, `MAILS_DATE`,
+`MAILS_MESSAGE_ID`, `MAILS_RULE`, `MAILS_KEYWORDS`, `MAILS_BODY` and
+`MAILS_BODY_FULL`. See [Placeholders](#placeholders).
+
+## Exit status
+
+| Status | Meaning |
+| --- | --- |
+| `0` | The command did what it was asked. For `sync` / `watch --once`, every mailbox synced |
+| `1` | Bad arguments or config, a missing or wrong key, a failed login, or at least one mailbox failed |
+
+`check` tries every account before failing, so one broken account does not hide
+the others. `watch` without `--once` is long-running: it reconnects on its own
+and is meant to be stopped by a supervisor with `SIGINT` or `SIGTERM`.
+
+## How watching works
+
+For every configured mailbox, `mails` opens its own connection, logs in,
+`SELECT`s the mailbox, and then loops:
+
+1. Enter `IDLE` with `idle_timeout`. The server pushes `EXISTS`/`RECENT` when
+   something changes; on timeout the client sends `DONE` and re-enters IDLE.
+2. On a change, re-`SELECT` the mailbox to refresh `UIDVALIDITY` and `UIDNEXT`.
+3. `UID SEARCH UID <last+1>:*`, then `UID FETCH` each new UID for its header and
+   a bounded slice of its text body.
+4. Parse MIME, run every matching rule's command, and advance `last_uid`.
+
+If the server rejects `IDLE`, the loop falls back to polling every 60 seconds.
+`UIDVALIDITY` changes reset the cursor and rescan the mailbox. Connection
+failures reconnect with exponential backoff, capped at five minutes.
+`startup_sync = false` means mail that already exists when the process starts is
+skipped; `true` scans it from the beginning, which can be slow on large
+mailboxes. `mails sync` always scans the whole mailbox once, so it is useful for
+testing rules against existing mail; it does not mark anything as read.
+
+Bodies are fetched with `BODY.PEEK`, so watching never marks messages as seen.
+`text/plain` is preferred; HTML-only mail is stripped of tags. UTF-8, US-ASCII
+and ISO-8859-1 are decoded; other charsets fall back to a lossy UTF-8
+interpretation, so keywords in, say, GBK mail may not match.
+
+## Running as a service
+
+`mails watch` stays in the foreground and logs to standard error, which is what
+supervisors want. A minimal systemd user unit:
+
+```ini
+# ~/.config/systemd/user/mails.service
+[Unit]
+Description=mails IMAP watcher
+After=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/mails watch --config %h/.local/bin/mails.toml
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
+```
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now mails
+journalctl --user -u mails -f
+```
+
+Run `mails check --config ...` once before enabling the unit; it prints the
+config path, whether the key was found, and every mailbox it can select.
+
+## Building
+
+Requires the MoonBit toolchain (`moon version --all`) and a C compiler.
+
+```sh
+moon build --target native --release
+# binary: _build/native/release/build/cmd/mails/mails.exe
+```
+
+During development the debug build works too:
+
+```sh
+moon build --target native
+./_build/native/debug/build/cmd/mails/mails.exe version
+```
+
+Tests and the warning-free gate:
+
+```sh
+moon test --target native
+moon check --target native --deny-warn
+moon fmt --check
+```
+
+### Static Linux build
+
+`scripts/build-linux-static.sh` is what the release workflow uses. A glibc
+build records the build machine's symbol versions, so a binary built on a new
+runner refuses to start on an older distribution (`GLIBC_2.38 not found`);
+linking against musl statically removes that entire class of problem.
+
+```sh
+sudo apt-get install musl-tools
+./scripts/build-linux-static.sh dist/mails-linux-x86_64
+```
+
+## Differences from goimapnotify
+
+- Config is TOML, lives next to the binary, and is not searched for in
+  `$XDG_CONFIG_HOME`.
+- Desktop notifications are not built in; a rule command can call
+  `notify-send`, `terminal-notifier`, or anything else.
+- Passwords are encrypted at rest; goimapnotify stores them in clear text.
+- Matching is keyword-based with subject/body/from/to fields, not just "run a
+  command for every new message".
+- IMAP only. JMAP is not implemented.
+
+## Limitations
+
+- **IMAP only.** JMAP and POP3 are not implemented. Authentication is
+  `LOGIN` (with TLS); OAuth2/XOAUTH2 is not supported, so use an app password
+  for providers that require one.
+- **No persistent cursor.** The last seen UID lives in memory. After a restart
+  with `startup_sync = false`, mail that arrived while `mails` was down is
+  skipped; run `mails sync` (or set `startup_sync = true`) if you need it.
+- **Text charsets.** UTF-8, US-ASCII and ISO-8859-1 are decoded. Other charsets
+  fall back to a lossy UTF-8 interpretation, so keywords in, for example, GBK
+  mail may not match.
+- **One connection per mailbox**, and rule commands for a mailbox run
+  sequentially. A slow command delays processing of later messages on that
+  mailbox; use `timeout` to bound it.
+- **Plain passwords are still accepted** for compatibility with password
+  helpers, but they are not encrypted at rest. Prefer `mails encrypt`.
+- **No desktop notification backend.** Call `notify-send`,
+  `terminal-notifier`, `logger` or your own script from a rule.
+
+## License
+
+Apache-2.0

@@ -1,0 +1,46 @@
+{
+  "name": "@tomasko/mails",
+  "version": "0.1.1",
+  "description": "Watch IMAP mailboxes with IDLE and run shell commands when a message matches subject or body keywords. A single static binary with encrypted credential storage.",
+  "license": "Apache-2.0",
+  "bin": {
+    "mails": "bin/mails.js"
+  },
+  "files": [
+    "bin/mails.js",
+    "lib.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tomasky/mails.git"
+  },
+  "homepage": "https://github.com/tomasky/mails",
+  "bugs": "https://github.com/tomasky/mails/issues",
+  "keywords": [
+    "mails",
+    "imap",
+    "idle",
+    "email",
+    "notify",
+    "watch",
+    "mailbox",
+    "encrypted-credentials",
+    "moonbit"
+  ],
+  "preferGlobal": true
+}

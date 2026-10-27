@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: check, format and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install MoonBit
+        run: |
+          curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash
+          echo "$HOME/.moon/bin" >> "$GITHUB_PATH"
+
+      - name: Show toolchain
+        run: moon version --all
+
+      - name: Show Node and Bun versions
+        run: |
+          node --version
+          which bun && bun --version || true
+
+      - name: Update dependencies
+        run: moon update
+
+      - name: Check version consistency
+        run: |
+          set -eu
+          MOD=$(sed -n 's/^version *= *"\(.*\)"/\1/p' moon.mod)
+          CLI=$(sed -n 's/.*let cli_version : String = "\(.*\)"/\1/p' cli.mbt)
+          NPM=$(node -p "require('./npmjs/package.json').version")
+          printf 'moon.mod=%s\ncli.mbt=%s\nnpmjs=%s\n' "$MOD" "$CLI" "$NPM"
+          [ "$MOD" = "$CLI" ]
+          [ "$MOD" = "$NPM" ]
+
+      - name: Check (warnings are errors)
+        run: moon check --target native --deny-warn
+
+      # The repository is kept warning-free: `--deny-warn` fails on compiler
+      # warnings and `moon fmt --check` fails on formatting drift.
+      - name: Format check
+        run: moon fmt --check
+
+      - name: Test
+        run: moon test --target native
+
+  shellcheck:
+    name: lint install.sh
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck install.sh
+
+  npm:
+    name: lint the npm wrapper
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Check every script the package ships, so adding one cannot silently
+      # leave the check pointing at a file that no longer exists.
+      - name: Syntax check
+        run: |
+          set -eu
+          find npmjs -name '*.js' -not -path '*/node_modules/*' -print0 |
+            while IFS= read -r -d '' script; do
+              echo "node --check $script"
+              node --check "$script"
+            done
+      - name: Unit tests
+        working-directory: npmjs
+        run: node --test
