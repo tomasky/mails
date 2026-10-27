@@ -83,7 +83,10 @@ build_openssl() {
         --prefix="$openssl_prefix" \
         --openssldir="$openssl_prefix/ssl" \
         no-shared no-dso no-tests no-zlib no-zstd no-asm no-async
-    make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" build_sw
+    # build_libs only builds libcrypto.a/libssl.a. `build_sw` would also
+    # compile the whole `openssl` command-line suite, which adds minutes to
+    # every release build and produces nothing `mails` links.
+    make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" build_libs
     # Copy the two archives and the headers instead of `make install`, which
     # also spends minutes generating man pages we never read.
     mkdir -p "$openssl_prefix/lib" "$openssl_prefix/include"
@@ -174,9 +177,25 @@ restore_tls_stub() {
     mv -f "$async_tls_dir/openssl.c.mails-orig" "$async_tls_dir/openssl.c"
   fi
 }
+
+# `moon update` only refreshes the registry index; the package sources land in
+# .mooncakes when a build/check first resolves them. A fresh CI runner has an
+# empty .mooncakes, so make sure async is unpacked before patching its stub.
+ensure_moon_deps() {
+  [ -d "$async_tls_dir" ] && return 0
+  say "mails: resolving dependencies (moon update && moon check)"
+  ( cd "$root" && moon update ) >/dev/null 2>&1 || true
+  ( cd "$root" && moon check --target native ) >/dev/null 2>&1 || true
+  if [ ! -d "$async_tls_dir" ]; then
+    say "mails: fetching dependencies with a native build"
+    ( cd "$root" && moon build --target native ) >/dev/null 2>&1 || true
+  fi
+}
+
 if [ "$use_tls" = 1 ]; then
+  ensure_moon_deps
   [ -d "$async_tls_dir" ] ||
-    die "$async_tls_dir is missing; run 'moon update' first"
+    die "$async_tls_dir is still missing after `moon update && moon check`"
   cp "$async_tls_dir/openssl.c" "$async_tls_dir/openssl.c.mails-orig"
   cp "$root/scripts/tls/openssl_static.c" "$async_tls_dir/openssl.c"
   trap restore_tls_stub EXIT
@@ -185,6 +204,10 @@ fi
 # --- build -----------------------------------------------------------------
 say "mails: building a static binary (musl, workdir $work)"
 cd "$root"
+# Drop any native objects from an earlier run with a different compiler: the
+# dependency bootstrap above, or a previous glibc build, would otherwise leave
+# objects that must not be reused for a musl static link.
+rm -rf "$root/_build/native"
 MOON_CC="$work/mails-musl-gcc" MOON_AR=ar \
   moon build --target native --release
 
