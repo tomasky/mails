@@ -13,6 +13,7 @@ import {
   "moonbitlang/async/stdio",
   "moonbitlang/async/tls",
   "moonbit-community/toml",
+  "LL728/moon_encoding",
   "cc06b/mooncry/lib",
 }
 

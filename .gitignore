@@ -10,3 +10,6 @@ mails.toml
 .env
 .env.*
 !.env.example
+# IMAP cursors written next to mails.toml.
+.*.cursor
+.*.cursor.tmp

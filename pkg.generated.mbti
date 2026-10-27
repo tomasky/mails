@@ -26,6 +26,8 @@ pub let config_file_name : String
 
 pub async fn credential_for(Account, String, String) -> Credential raise MailsError
 
+pub fn cursor_path(String, String, String) -> String
+
 pub fn decode_charset(Bytes, String) -> String
 
 pub fn decode_encoded_words(String) -> String
@@ -57,6 +59,8 @@ pub fn is_sealed(String) -> Bool
 pub fn key_uses_passphrase(String) -> Bool raise MailsError
 
 pub async fn load_config(String) -> Config raise MailsError
+
+pub async fn load_cursor(String, String, String) -> (Int32, Int32)
 
 pub async fn load_env_file(String) -> EnvFile raise MailsError
 
@@ -122,6 +126,8 @@ pub async fn run_watch(Config, Array[Account], String, Bool) -> Unit
 
 pub fn sample_config() -> String
 
+pub async fn save_cursor(String, String, String, Int32, Int32) -> Unit
+
 pub async fn save_refresh_token(String, Account, String, String) -> Unit raise MailsError
 
 pub async fn seal_secret(String, String) -> String raise MailsError
@@ -134,7 +140,7 @@ pub fn set_log_level(LogLevel) -> Unit
 
 pub fn shell_quote(String) -> String
 
-pub fn split_header_body(String) -> (Array[(String, String)], String)
+pub fn split_header_body(Bytes) -> (Array[(String, String)], Bytes)
 
 pub fn string_to_bytes(String) -> Bytes
 
@@ -263,6 +269,7 @@ pub async fn ImapClient::connect(String, Int32, Bool, Bool, String, String) -> S
 pub async fn ImapClient::connect_with(String, Int32, Bool, Bool, String, Credential) -> Self
 pub async fn ImapClient::fetch_message(Self, String, Int32) -> FetchedMessage?
 pub fn ImapClient::has_capability(Self, String) -> Bool
+pub async fn ImapClient::highest_uid(Self) -> Int32
 pub async fn ImapClient::idle(Self, Int32) -> Bool
 pub async fn ImapClient::search_uids(Self, Int32) -> Array[String]
 pub async fn ImapClient::select_mailbox(Self, String) -> MailboxStatus

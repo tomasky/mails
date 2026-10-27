@@ -283,8 +283,6 @@ fn encode_modified_utf7(name : String) -> String {
 }
 
 ///|
-
-///|
 /// Decode an IMAP modified-UTF-7 mailbox name.
 pub fn decode_modified_utf7(name : String) -> String {
   let out = StringBuilder()
@@ -767,4 +765,22 @@ pub async fn ImapClient::search_uids(
     }
   }
   out
+}
+
+///|
+/// The highest UID in the selected mailbox, or 0 when it is empty.
+///
+/// Used to start watching after the mail that is already there when neither a
+/// saved cursor nor `UIDNEXT` is available. `UID SEARCH UID 1:*` answers with
+/// every UID, and servers that answer a `n:*` range with the newest UID even
+/// when it is below `n` make the last token unreliable, so take the maximum.
+pub async fn ImapClient::highest_uid(client : ImapClient) -> Int32 {
+  let mut highest = 0
+  for raw in client.search_uids(1) {
+    let value = @string.parse_int(raw) catch { _ => -1 }
+    if value > highest {
+      highest = value
+    }
+  }
+  highest
 }

@@ -97,25 +97,6 @@ fn decode_quoted_printable_bytes(
 }
 
 ///|
-fn decode_latin1(data : Bytes) -> String {
-  let out = StringBuilder()
-  for byte in data {
-    out.write_char(byte.to_int().unsafe_to_char())
-  }
-  out.to_string()
-}
-
-///|
-/// Decode bytes in the named charset well enough for keyword matching.
-pub fn decode_charset(data : Bytes, charset : String) -> String {
-  match charset.to_lower() {
-    "iso-8859-1" | "latin1" | "latin-1" | "windows-1252" => decode_latin1(data)
-    "us-ascii" | "ascii" => bytes_to_string_lossy(data)
-    _ => bytes_to_string_lossy(data)
-  }
-}
-
-///|
 /// Decode RFC 2047 encoded words (`=?utf-8?B?...?=`) in a header value.
 pub fn decode_encoded_words(value : String) -> String {
   let out = StringBuilder()
@@ -261,19 +242,71 @@ fn param_value(params : Array[(String, String)], name : String) -> String? {
 }
 
 ///|
-fn decode_transfer(body : String, encoding : String) -> Bytes {
-  match encoding.to_lower() {
-    "base64" => {
-      let compact = StringBuilder()
-      for c in body {
-        if c != ' ' && c != '\r' && c != '\n' && c != '\t' {
-          compact.write_char(c)
+/// Split `data` on every occurrence of `separator`, returning the pieces.
+fn bytes_split(data : Bytes, separator : Bytes) -> Array[Bytes] {
+  let out : Array[Bytes] = []
+  let mut start = 0
+  while start <= data.length() {
+    let found = data[start:].find(separator[:])
+    match found {
+      Some(offset) => {
+        out.push(data[start:start + offset].to_owned())
+        start = start + offset + separator.length()
+      }
+      None => {
+        out.push(data[start:].to_owned())
+        break
+      }
+    }
+  }
+  out
+}
+
+///|
+/// Decode a quoted-printable body directly on bytes.
+///
+/// The MIME walker used to go through a lossy `String` first, which destroyed
+/// every byte above 0x7F and turned GBK mail into U+FFFD before the charset
+/// decoder ever saw it.
+fn decode_quoted_printable_data(data : Bytes) -> Bytes {
+  let out : Array[Byte] = []
+  let mut index = 0
+  while index < data.length() {
+    let value = data[index].to_int()
+    if value == 0x3D {
+      if index + 2 < data.length() {
+        match
+          (
+            hex_nibble(data[index + 1].to_int().unsafe_to_char()),
+            hex_nibble(data[index + 2].to_int().unsafe_to_char()),
+          ) {
+          (Some(high), Some(low)) => {
+            out.push(((high * 16 + low) & 0xFF).to_byte())
+            index = index + 3
+            continue
+          }
+          _ => ()
         }
       }
-      @base64.decode_lossy(compact.to_string())
+      index = index + 1
+    } else if value == 0x0D || value == 0x0A {
+      index = index + 1
+    } else {
+      out.push(data[index])
+      index = index + 1
     }
-    "quoted-printable" => decode_quoted_printable_bytes(body, false)
-    _ => string_to_bytes(body)
+  }
+  Bytes::from_array(out[:])
+}
+
+///|
+fn decode_transfer(body : Bytes, encoding : String) -> Bytes {
+  match encoding.to_lower() {
+    "base64" =>
+      // Base64 payloads are ASCII, so the lossy read is harmless here.
+      @base64.decode_lossy(bytes_to_string_lossy(body), ignore_whitespace=true)
+    "quoted-printable" => decode_quoted_printable_data(body)
+    _ => body
   }
 }
 
@@ -383,7 +416,7 @@ pub struct MimeText {
 ///|
 fn walk_mime(
   headers : Array[(String, String)],
-  body : String,
+  body : Bytes,
   depth : Int32,
   text : MimeText,
 ) -> Unit {
@@ -398,19 +431,20 @@ fn walk_mime(
   if media_type.has_prefix("multipart/") {
     match param_value(params, "boundary") {
       Some(boundary) if boundary != "" => {
-        let marker = "--" + boundary
-        for raw_part in body.split(marker) {
-          let part = raw_part.to_owned()
-          let trimmed = trim(part)
-          if trimmed == "" || trimmed == "--" || trimmed.has_prefix("--") {
+        let marker = string_to_bytes("--" + boundary)
+        for raw_part in bytes_split(body, marker) {
+          if raw_part.length() == 0 {
             continue
           }
-          let content = if part.has_prefix("\r\n") {
-            part[2:].to_owned()
-          } else if part.has_prefix("\n") {
-            part[1:].to_owned()
+          if raw_part.has_prefix(string_to_bytes("--")) {
+            continue
+          }
+          let content = if raw_part.has_prefix(string_to_bytes("\r\n")) {
+            raw_part[2:].to_owned()
+          } else if raw_part.has_prefix(string_to_bytes("\n")) {
+            raw_part[1:].to_owned()
           } else {
-            part
+            raw_part
           }
           let (part_headers, part_body) = split_header_body(content)
           walk_mime(part_headers, part_body, depth + 1, text)
@@ -442,18 +476,21 @@ fn walk_mime(
 
 ///|
 /// Split a raw MIME entity into parsed headers and a body string.
-pub fn split_header_body(raw : String) -> (Array[(String, String)], String) {
-  let separator = match raw.find("\r\n\r\n") {
+pub fn split_header_body(raw : Bytes) -> (Array[(String, String)], Bytes) {
+  let separator = match raw.find(string_to_bytes("\r\n\r\n")) {
     Some(index) => Some((index, 4))
     None =>
-      match raw.find("\n\n") {
+      match raw.find(string_to_bytes("\n\n")) {
         Some(index) => Some((index, 2))
         None => None
       }
   }
   match separator {
     Some((index, width)) =>
-      (parse_headers(raw[0:index].to_owned()), raw[index + width:].to_owned())
+      (
+        parse_headers(bytes_to_string_lossy(raw[0:index].to_owned())),
+        raw[index + width:].to_owned(),
+      )
     None => ([], raw)
   }
 }
@@ -469,7 +506,7 @@ pub fn message_body_text_with_headers(
   raw_body : Bytes,
 ) -> String {
   let text : MimeText = { plain: "", html: "", }
-  walk_mime(headers, bytes_to_string_lossy(raw_body), 0, text)
+  walk_mime(headers, raw_body, 0, text)
   let plain = collapse_whitespace(text.plain)
   if !is_blank(plain) {
     plain
@@ -481,9 +518,8 @@ pub fn message_body_text_with_headers(
 ///|
 /// Extract the readable text of a standalone MIME entity.
 pub fn message_body_text(raw_body : Bytes) -> String {
-  let raw = bytes_to_string_lossy(raw_body)
-  let (headers, body) = split_header_body(raw)
-  message_body_text_with_headers(headers, string_to_bytes(body))
+  let (headers, body) = split_header_body(raw_body)
+  message_body_text_with_headers(headers, body)
 }
 
 ///|

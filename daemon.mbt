@@ -126,7 +126,11 @@ async fn sync_mailbox(
 
 ///|
 /// Run the session body, then always close the connection.
-async fn watch_mailbox(runtime : Runtime, mailbox : String) -> Unit {
+async fn watch_mailbox(
+  runtime : Runtime,
+  mailbox : String,
+  first_connection : Ref[Bool],
+) -> Unit {
   let account = runtime.account
   let credential = credential_for(account, runtime.config_dir, runtime.key)
   let client = ImapClient::connect_with(
@@ -138,7 +142,7 @@ async fn watch_mailbox(runtime : Runtime, mailbox : String) -> Unit {
     credential,
   )
   let failure : Error? = (() => {
-    watch_connected(runtime, mailbox, client)
+    watch_connected(runtime, mailbox, client, first_connection)
     None
   })() catch {
     err => Some(err)
@@ -153,21 +157,70 @@ async fn watch_mailbox(runtime : Runtime, mailbox : String) -> Unit {
 }
 
 ///|
+/// The UID to start scanning after, given what the config, the saved cursor
+/// and the `SELECT` reply say.
+///
+/// `first_connection` is the first connection to this mailbox in this process.
+/// It follows `startup_sync`, while a reconnect resumes from the saved cursor
+/// instead of replaying mail that was already handled: rule commands must not
+/// run twice because the connection dropped.
+///
+/// `None` means "ask the server for the newest UID it already holds", the only
+/// case where nothing on disk or in the reply says what was handled before.
+fn initial_last_uid(
+  startup_sync : Bool,
+  first_connection : Bool,
+  once : Bool,
+  uid_validity : Int32,
+  uid_next : Int32,
+  saved_uv : Int32,
+  saved_last_uid : Int32,
+) -> Int32? {
+  // `mails sync` scans the whole mailbox; a one-shot run is always full.
+  if once || (startup_sync && first_connection) {
+    return Some(0)
+  }
+  // The saved cursor beats `UIDNEXT` on a reconnect: servers that answer
+  // `UIDNEXT 0` while mail exists would otherwise force a full rescan and
+  // re-run every rule command.
+  if !first_connection && saved_last_uid > 0 && saved_uv == uid_validity {
+    return Some(saved_last_uid)
+  }
+  if uid_next > 0 {
+    return Some(uid_next - 1)
+  }
+  None
+}
+
+///|
 async fn watch_connected(
   runtime : Runtime,
   mailbox : String,
   client : ImapClient,
+  first_connection : Ref[Bool],
 ) -> Unit {
   let account = runtime.account
   let mut status = client.select_mailbox(mailbox)
-  // `mails sync` scans the whole mailbox even when startup_sync is off; a
-  // one-shot run that skipped everything would be useless.
-  let mut last_uid = if account.startup_sync || runtime.once {
-    0
-  } else if status.uid_next > 0 {
-    status.uid_next - 1
-  } else {
-    0
+  let (saved_uv, saved_last_uid) = load_cursor(
+    runtime.config_dir,
+    account.name,
+    mailbox,
+  )
+  let mut last_uid = match
+    initial_last_uid(
+      account.startup_sync,
+      first_connection.val,
+      runtime.once,
+      status.uid_validity,
+      status.uid_next,
+      saved_uv,
+      saved_last_uid,
+    ) {
+    Some(value) => value
+    // Nothing says what was handled before and the server does not report
+    // `UIDNEXT` either: treat the mail that is already there as seen instead of
+    // replaying it.
+    None => client.highest_uid()
   }
   log_info(
     "watching " +
@@ -178,9 +231,21 @@ async fn watch_connected(
     status.uid_validity.to_string() +
     ", next uid " +
     status.uid_next.to_string() +
+    ", handling mail after uid " +
+    last_uid.to_string() +
     ")",
   )
   last_uid = sync_mailbox(runtime, client, mailbox, last_uid)
+  save_cursor(
+    runtime.config_dir,
+    account.name,
+    mailbox,
+    status.uid_validity,
+    last_uid,
+  )
+  // From here on the mailbox has a cursor, so a reconnect resumes from it
+  // rather than scanning again.
+  first_connection.val = false
   if runtime.once {
     log_info("sync of " + mailbox + " finished")
     return
@@ -215,6 +280,13 @@ async fn watch_connected(
     status = next_status
     if changed || status.uid_next - 1 > last_uid {
       last_uid = sync_mailbox(runtime, client, mailbox, last_uid)
+      save_cursor(
+        runtime.config_dir,
+        account.name,
+        mailbox,
+        status.uid_validity,
+        last_uid,
+      )
     }
   }
 }
@@ -231,10 +303,13 @@ async fn mailbox_loop(runtime : Runtime, mailbox : String) -> Unit {
     30_000
   }
   let mut backoff = base_backoff
+  // Shared with `watch_connected`, which clears it once the mailbox has been
+  // scanned and its cursor saved.
+  let first_connection : Ref[Bool] = Ref(true)
   while true {
     let started = @async.now()
     let failure : Error? = (() => {
-      watch_mailbox(runtime, mailbox)
+      watch_mailbox(runtime, mailbox, first_connection)
       None
     })() catch {
       err => Some(err)

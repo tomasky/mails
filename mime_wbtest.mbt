@@ -106,3 +106,57 @@ test "multipart headers can be passed separately from the body" {
   let text = message_body_text_with_headers(headers, string_to_bytes(body))
   assert_eq(text, "plain part")
 }
+
+///|
+test "gb2312 body survives the mime walker" {
+  // A QQ/163-style message: GB2312 body, 8bit transfer encoding.
+  let header = string_to_bytes(
+    "Subject: =?gb2312?B?xOO6w6OsysC95w==?=\r\n" +
+    "Content-Type: text/plain; charset=gb2312\r\n" +
+    "Content-Transfer-Encoding: 8bit\r\n\r\n",
+  )
+  let body = @base64.decode_lossy("xOO6w6OsysC95w==")
+  let message = build_message("INBOX", "1", 100, header, body)
+  assert_eq(message.subject, "你好，世界")
+  assert_eq(message.body, "你好，世界")
+}
+
+///|
+test "gb2312 quoted-printable body decodes" {
+  // GB2312 quoted-printable bytes for the expected Chinese body.
+  let header = string_to_bytes(
+    "Content-Type: text/plain; charset=gb2312\r\n" +
+    "Content-Transfer-Encoding: quoted-printable\r\n\r\n",
+  )
+  let body = string_to_bytes("=C4=E3=BA=C3")
+  let message = build_message("INBOX", "2", 50, header, body)
+  assert_eq(message.body, "你好")
+}
+
+///|
+test "gb2312 part inside a multipart message decodes" {
+  let header = string_to_bytes(
+    "Subject: =?gb2312?B?xOO6w6OsysC95w==?=\r\n" +
+    "Content-Type: multipart/alternative; boundary=\"b1\"\r\n\r\n",
+  )
+  let body = string_to_bytes(
+      "--b1\r\n" +
+      "Content-Type: text/plain; charset=gb2312\r\n" +
+      "Content-Transfer-Encoding: 8bit\r\n\r\n",
+    ) +
+    @base64.decode_lossy("xOO6w6OsysC95w==") +
+    string_to_bytes("\r\n--b1--\r\n")
+  let message = build_message("INBOX", "3", 200, header, body)
+  assert_eq(message.body, "你好，世界")
+}
+
+///|
+test "base64 gb2312 body decodes" {
+  let header = string_to_bytes(
+    "Content-Type: text/plain; charset=gb2312\r\n" +
+    "Content-Transfer-Encoding: base64\r\n\r\n",
+  )
+  let body = string_to_bytes("xOO6w6OsysC95w==\r\n")
+  let message = build_message("INBOX", "4", 60, header, body)
+  assert_eq(message.body, "你好，世界")
+}

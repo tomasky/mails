@@ -92,7 +92,7 @@ already develop with MoonBit.
 curl -LsSf https://raw.githubusercontent.com/tomasky/mails/master/install.sh | bash
 ```
 
-No Node.js or MoonBit required. The script accepts `--version 0.1.4`,
+No Node.js or MoonBit required. The script accepts `--version 0.1.5`,
 `--install-dir DIR` and `--no-verify`, and verifies the published SHA-256
 before installing. By default it installs into `~/.local/bin`.
 
@@ -137,7 +137,7 @@ See [Building](#building) for the static Linux build and tests.
 
 ## Releases
 
-Releases are tagged `v<version>` (for example `v0.1.4`). Each release publishes
+Releases are tagged `v<version>` (for example `v0.1.5`). Each release publishes
 one binary per target plus its `.sha256` checksum; there are no archives,
 because the installer, the npm launcher and `curl` all want the bare binary.
 Source archives are provided by GitHub for every tag.
@@ -553,20 +553,31 @@ For every configured mailbox, `mails` opens its own connection, logs in,
 2. On a change, re-`SELECT` the mailbox to refresh `UIDVALIDITY` and `UIDNEXT`.
 3. `UID SEARCH UID <last+1>:*`, then `UID FETCH` each new UID for its header and
    a bounded slice of its text body.
-4. Parse MIME, run every matching rule's command, and advance `last_uid`.
+4. Parse MIME, run every matching rule's command, and advance `last_uid`, which
+   is also written to `.<account>.<mailbox>.cursor` next to `mails.toml`.
 
 If the server rejects `IDLE`, the loop falls back to polling every 60 seconds.
-`UIDVALIDITY` changes reset the cursor and rescan the mailbox. Connection
-failures reconnect with exponential backoff, capped at five minutes.
-`startup_sync = false` means mail that already exists when the process starts is
-skipped; `true` scans it from the beginning, which can be slow on large
-mailboxes. `mails sync` always scans the whole mailbox once, so it is useful for
-testing rules against existing mail; it does not mark anything as read.
+The saved cursor is what a reconnect resumes from, so a dropped connection does
+not run a rule command twice for the same message; it wins over `UIDNEXT`, which
+some servers report as `0` even though mail exists. `UIDVALIDITY` changes reset
+the cursor and rescan the mailbox. Connection failures reconnect with
+exponential backoff, capped at five minutes.
+
+`startup_sync` decides what the *first* connection of a run does.
+`startup_sync = false` skips the mail that is already in the mailbox: the scan
+continues at `UIDNEXT - 1`, or, when the server reports no usable `UIDNEXT`, it
+starts after the newest message that exists. `true` scans the whole mailbox,
+which can be slow on large mailboxes. Either way, a reconnect inside the same
+run resumes from the cursor and only processes mail that arrived since. `mails
+sync` always scans the whole mailbox once, so it is useful for testing rules
+against existing mail; it does not mark anything as read.
 
 Bodies are fetched with `BODY.PEEK`, so watching never marks messages as seen.
-`text/plain` is preferred; HTML-only mail is stripped of tags. UTF-8, US-ASCII
-and ISO-8859-1 are decoded; other charsets fall back to a lossy UTF-8
-interpretation, so keywords in, say, GBK mail may not match.
+`text/plain` is preferred; HTML-only mail is stripped of tags. UTF-8 plus every
+charset the WHATWG Encoding Standard knows about is decoded —
+GBK/GB2312/GB18030, Big5, Shift_JIS, EUC-JP/KR, ISO-2022-JP and the
+ISO-8859/windows-125x families — so Chinese, Japanese and Korean mail matches
+and renders correctly. Unknown charsets fall back to a lossy UTF-8 read.
 
 ## Running as a service
 
@@ -668,12 +679,16 @@ directly instead of resolving them at runtime.
 - **OAuth2 needs a one-time `mails login`.** The device code flow refreshes
   the access token automatically afterwards, but a revoked or expired refresh
   token has to be replaced by running `mails login` again.
-- **No persistent cursor.** The last seen UID lives in memory. After a restart
-  with `startup_sync = false`, mail that arrived while `mails` was down is
-  skipped; run `mails sync` (or set `startup_sync = true`) if you need it.
-- **Text charsets.** UTF-8, US-ASCII and ISO-8859-1 are decoded. Other charsets
-  fall back to a lossy UTF-8 interpretation, so keywords in, for example, GBK
-  mail may not match.
+- **The cursor is a file next to the config.** `.<account>.<mailbox>.cursor`
+  (mode `0600`) records the last handled UID, so a dropped connection resumes
+  instead of replaying mail. It is per account and per mailbox. A fresh `mails`
+  process still follows `startup_sync`, so mail that arrived while it was down is
+  skipped when that is `false`; run `mails sync` to handle it.
+- **Text charsets.** UTF-8 plus everything the WHATWG Encoding Standard knows
+  about: GBK/GB2312/GB18030, Big5, Shift_JIS, EUC-JP/KR, ISO-2022-JP and the
+  ISO-8859/windows-125x single-byte families, so Chinese mail from QQ, 163 and
+  Exmail matches and renders correctly. Unknown charsets still fall back to a
+  lossy UTF-8 read.
 - **One connection per mailbox**, and rule commands for a mailbox run
   sequentially. A slow command delays processing of later messages on that
   mailbox; use `timeout` to bound it.

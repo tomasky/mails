@@ -1,6 +1,6 @@
 name = "kupas/mails"
 
-version = "0.1.4"
+version = "0.1.5"
 
 readme = "README.md"
 
@@ -18,4 +18,5 @@ import {
   "moonbitlang/async@0.22.4",
   "cc06b/mooncry@0.95.0",
   "moonbit-community/toml@0.5.0",
+  "LL728/moon_encoding@0.2.0",
 }

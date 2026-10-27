@@ -6,8 +6,9 @@
 #   mails check
 
 [general]
-# Process mail that already exists when a mailbox is first watched. Leave this
-# false unless you really want to run rules against the whole mailbox.
+# Process mail that already exists when a mailbox is first watched, that is, on
+# the first connection of a run. A reconnect resumes where the last one stopped.
+# Leave this false unless you really want to run rules against the whole mailbox.
 startup_sync = false
 # Re-enter IDLE this often; server-side idle limits are typically 30 minutes.
 idle_timeout = "29m"
