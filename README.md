@@ -330,12 +330,58 @@ mailboxes = ["INBOX"]
 | `oauth_token_endpoint` | token endpoint, required for `custom` |
 | `oauth_token_file` | where the refresh token lives; default `.<account>.oauth` |
 
-For Microsoft, register an app in Entra ID, add the delegated permission
-`IMAP.AccessAsUser.All` (Office 365 Exchange Online) and enable *Allow public
-client flows*. For Google, use the device flow on a "TV and limited input"
-OAuth client with the `https://mail.google.com/` scope. `mails check` verifies
-that the stored token still logs in, and `mails login` can be re-run at any time
-to replace a revoked token.
+For Google, use the device flow on a "TV and limited input" OAuth client with
+the `https://mail.google.com/` scope. `mails check` verifies that the stored
+token still logs in, and `mails login` can be re-run at any time to replace a
+revoked token.
+
+##### Outlook / Microsoft 365, step by step
+
+1. Open <https://entra.microsoft.com> → **Applications** → **App registrations**
+   → **New registration**.
+   - *Name*: `mails`.
+   - *Supported account types*: pick what matches your mailbox — "Personal
+     Microsoft accounts only" for `@outlook.com`/`@hotmail.com`, "Accounts in
+     this organizational directory only" for one company tenant, or "Accounts
+     in any organizational directory and personal Microsoft accounts" for both.
+   - *Redirect URI*: leave empty; the device flow does not need one.
+2. In the new app: **Authentication** → **Advanced settings** → **Allow public
+   client flows** = **Yes** → **Save**. This is required, otherwise the token
+   endpoint answers `AADSTS7000218`.
+3. **API permissions** → **Add a permission** → **APIs my organization uses** →
+   **Office 365 Exchange Online** → **Delegated permissions** →
+   **`IMAP.AccessAsUser.All`** → **Add permissions**. (For a personal-accounts
+   app this API may not be listed; consent is then requested at sign-in.)
+4. Copy the **Application (client) ID** from the app's overview page.
+5. Configure the account, matching `oauth_tenant` to the choice in step 1:
+
+   ```toml
+   [accounts.outlook]
+   host = "outlook.office365.com"
+   port = 993
+   username = "you@outlook.com"
+   auth = "xoauth2"
+   oauth_provider = "microsoft"
+   oauth_tenant = "consumers"      # personal accounts; "organizations" or the
+                                   # tenant id for work accounts; "common" for both
+   oauth_client_id = "00000000-0000-0000-0000-000000000000"
+   mailboxes = ["INBOX"]
+   ```
+
+6. Run `mails login --account outlook`, open the printed URL on any device and
+   enter the code. After approval the command stores the refresh token and
+   prints `IMAP login ok`.
+7. `mails check` now passes and `mails watch` keeps running without a browser.
+
+| Symptom | Cause and fix |
+| --- | --- |
+| `AADSTS700016` application not found in tenant | `oauth_tenant` does not match the app's supported account types; use `consumers`, `organizations`, `common` or the tenant id |
+| `AADSTS7000218` client authentication failed | **Allow public client flows** is still `No` |
+| `AADSTS65001` consent required | add the `IMAP.AccessAsUser.All` permission, or have a tenant admin grant consent |
+| `AADSTS500011` resource not found | the app is single-tenant but `oauth_tenant = "common"`; set the tenant id |
+| `AUTHENTICATE XOAUTH2` rejected, token is fresh | IMAP is disabled on the mailbox (Exchange: `Set-CASMailbox -ImapEnabled $true`) |
+| `LOGIN ... NO Basic authentication is disabled` | the account still uses `auth = "password"`; switch it to `xoauth2` |
+| token works but `SELECT` fails | the mailbox has no IMAP-enabled subscription; check the account's Exchange licence |
 
 ```toml
 [accounts.gmail]
