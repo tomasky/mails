@@ -343,6 +343,35 @@ fn next_tag(client : ImapClient) -> String {
 }
 
 ///|
+/// A command as it is safe to quote in logs and error messages.
+///
+/// `execute` raises an error containing the command it sent, and for `LOGIN`
+/// that command carries the plaintext password, so the credential has to be
+/// stripped before the message can reach a log file or the journal.
+fn redact_command(command : String) -> String {
+  let upper = command.to_upper()
+  if upper.has_prefix("LOGIN ") {
+    // LOGIN <user> <password> -- keep the user, drop the secret.
+    let rest = command[6:].to_owned()
+    let user = match rest.find(" ") {
+      Some(index) => rest[:index].to_owned()
+      None => rest
+    }
+    "LOGIN " + user + " <redacted>"
+  } else if upper.has_prefix("AUTHENTICATE ") {
+    // AUTHENTICATE <mechanism> [initial-response]
+    let rest = command[13:].to_owned()
+    let mechanism = match rest.find(" ") {
+      Some(index) => rest[:index].to_owned()
+      None => rest
+    }
+    "AUTHENTICATE " + mechanism + " <redacted>"
+  } else {
+    command
+  }
+}
+
+///|
 /// Send one command and collect every untagged line up to its tagged reply.
 async fn execute(client : ImapClient, command : String) -> ImapReply {
   let tag = next_tag(client)
@@ -373,7 +402,12 @@ async fn execute(client : ImapClient, command : String) -> ImapReply {
   let reply : ImapReply = { lines, status, text, }
   if status == "NO" || status == "BAD" {
     raise ImapProtocolError(
-      "server rejected '" + command + "': " + status + " " + text,
+      "server rejected '" +
+      redact_command(command) +
+      "': " +
+      status +
+      " " +
+      text,
     )
   }
   reply
