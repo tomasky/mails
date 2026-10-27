@@ -92,7 +92,7 @@ already develop with MoonBit.
 curl -LsSf https://raw.githubusercontent.com/tomasky/mails/master/install.sh | bash
 ```
 
-No Node.js or MoonBit required. The script accepts `--version 0.1.3`,
+No Node.js or MoonBit required. The script accepts `--version 0.1.4`,
 `--install-dir DIR` and `--no-verify`, and verifies the published SHA-256
 before installing. By default it installs into `~/.local/bin`.
 
@@ -137,7 +137,7 @@ See [Building](#building) for the static Linux build and tests.
 
 ## Releases
 
-Releases are tagged `v<version>` (for example `v0.1.3`). Each release publishes
+Releases are tagged `v<version>` (for example `v0.1.4`). Each release publishes
 one binary per target plus its `.sha256` checksum; there are no archives,
 because the installer, the npm launcher and `curl` all want the bare binary.
 Source archives are provided by GitHub for every tag.
@@ -272,9 +272,70 @@ Microsoft 365 account work directly**. Options:
   tls = false              # loopback only; do not expose this port
   ```
 
-- **Add XOAUTH2 support to `mails`** if you need it natively; that means an
-  Azure app registration, a refresh token and the `AUTHENTICATE XOAUTH2`
-  exchange.
+- **Use the built-in OAuth2 support** (see below), which needs no browser on
+  the server.
+
+#### Headless OAuth2 sign-in
+
+`mails` implements the OAuth2 **device authorization grant** (RFC 8628) and
+IMAP `AUTHENTICATE XOAUTH2`, so an account can be connected from a server that
+has no browser or no display at all:
+
+```bash
+mails login --account outlook
+```
+
+```text
+outlook: sign in to microsoft
+  1. open https://microsoft.com/devicelogin
+  2. enter the code: H7K2-QP4LM
+  waiting up to 15 minutes for approval (Ctrl-C to abort)...
+  saved the refresh token to /etc/mails/.outlook.oauth
+  IMAP login ok
+```
+
+The URL is opened on any device — a phone is enough. The refresh token is
+written to `.<account>.oauth` next to `mails.toml` with mode `0600`, sealed with
+AES-256-GCM when the key from `.env` is present. Access tokens are refreshed in
+memory and never written to disk.
+
+```toml
+[accounts.outlook]
+host = "outlook.office365.com"
+port = 993
+username = "you@outlook.com"
+auth = "xoauth2"
+oauth_provider = "microsoft"
+oauth_client_id = "<public client id>"
+mailboxes = ["INBOX"]
+
+[accounts.gmail]
+host = "imap.gmail.com"
+port = 993
+username = "you@gmail.com"
+auth = "xoauth2"
+oauth_provider = "google"
+oauth_client_id = "<public client id>"
+mailboxes = ["INBOX"]
+```
+
+| Key | Meaning |
+| --- | --- |
+| `auth` | `password` (default) or `xoauth2` |
+| `oauth_provider` | `microsoft` (default), `google`, or `custom` |
+| `oauth_client_id` | client id of a **public** app with the device code flow enabled |
+| `oauth_tenant` | Microsoft tenant: `common` (default), `consumers`, `organizations` or a tenant id |
+| `oauth_scope` | override the scope; defaults cover IMAP for Microsoft and Google |
+| `oauth_device_endpoint` | device code endpoint, required for `custom` |
+| `oauth_token_endpoint` | token endpoint, required for `custom` |
+| `oauth_token_file` | where the refresh token lives; default `.<account>.oauth` |
+
+For Microsoft, register an app in Entra ID, add the delegated permission
+`IMAP.AccessAsUser.All` (Office 365 Exchange Online) and enable *Allow public
+client flows*. For Google, use the device flow on a "TV and limited input"
+OAuth client with the `https://mail.google.com/` scope. `mails check` verifies
+that the stored token still logs in, and `mails login` can be re-run at any time
+to replace a revoked token.
 
 ```toml
 [accounts.gmail]
@@ -543,10 +604,12 @@ directly instead of resolving them at runtime.
 
 ## Limitations
 
-- **IMAP only.** JMAP and POP3 are not implemented. Authentication is
-  `LOGIN` (with TLS) only. OAuth2/XOAUTH2 is not supported, so Microsoft 365
-  and Outlook.com cannot be used directly; see
+- **IMAP only.** JMAP and POP3 are not implemented. Authentication is `LOGIN`
+  or `AUTHENTICATE XOAUTH2` (both with TLS); see
   [Providers that require OAuth2](#providers-that-require-oauth2).
+- **OAuth2 needs a one-time `mails login`.** The device code flow refreshes
+  the access token automatically afterwards, but a revoked or expired refresh
+  token has to be replaced by running `mails login` again.
 - **No persistent cursor.** The last seen UID lives in memory. After a restart
   with `startup_sync = false`, mail that arrived while `mails` was down is
   skipped; run `mails sync` (or set `startup_sync = true`) if you need it.

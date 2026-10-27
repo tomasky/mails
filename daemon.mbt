@@ -5,7 +5,8 @@
 pub struct Runtime {
   account : Account
   rules : Array[Rule]
-  password : String
+  config_dir : String
+  key : String
   once : Bool
   failed : Ref[Bool]
 }
@@ -127,13 +128,14 @@ async fn sync_mailbox(
 /// Run the session body, then always close the connection.
 async fn watch_mailbox(runtime : Runtime, mailbox : String) -> Unit {
   let account = runtime.account
-  let client = ImapClient::connect(
+  let credential = credential_for(account, runtime.config_dir, runtime.key)
+  let client = ImapClient::connect_with(
     account.host,
     account.port,
     account.use_tls,
     account.tls_verify,
     account.username,
-    runtime.password,
+    credential,
   )
   let failure : Error? = (() => {
     watch_connected(runtime, mailbox, client)
@@ -276,20 +278,24 @@ pub async fn run_watch(
   let failed : Ref[Bool] = Ref(false)
   @async.with_task_group(group => {
     for account in accounts {
-      if account.password == "" {
-        raise MailsError(
-          "account '" +
-          account.name +
-          "' has no password; run `mails encrypt --account " +
-          account.name +
-          " --write`",
-        )
+      // Fail fast on a missing password instead of reconnecting forever.
+      if account.auth is PasswordLogin {
+        if account.password == "" {
+          raise MailsError(
+            "account '" +
+            account.name +
+            "' has no password; run `mails encrypt --account " +
+            account.name +
+            " --write`",
+          )
+        }
+        ignore(resolve_secret(key, account.password))
       }
-      let password = resolve_secret(key, account.password)
       let runtime : Runtime = {
         account,
         rules: merge_rules(config.rules, account.rules),
-        password,
+        config_dir: config.dir,
+        key,
         once,
         failed,
       }

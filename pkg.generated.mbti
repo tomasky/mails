@@ -6,6 +6,8 @@ import {
 }
 
 // Values
+pub async fn access_token_for(Account, String, String) -> String raise MailsError
+
 pub fn action_env(ActionContext) -> Map[String, String]
 
 pub fn base64_decode(String) -> Bytes raise MailsError
@@ -21,6 +23,8 @@ pub fn bytes_to_string_lossy(Bytes) -> String
 pub fn collapse_whitespace(String) -> String
 
 pub let config_file_name : String
+
+pub async fn credential_for(Account, String, String) -> Credential raise MailsError
 
 pub fn decode_charset(Bytes, String) -> String
 
@@ -38,6 +42,8 @@ pub fn error_message(Error) -> String
 
 pub async fn executable_dir() -> String raise MailsError
 
+pub fn forget_access_token(String) -> Unit
+
 pub fn format_duration(Int32) -> String
 
 pub async fn generate_key_spec() -> String raise MailsError
@@ -53,6 +59,8 @@ pub fn key_uses_passphrase(String) -> Bool raise MailsError
 pub async fn load_config(String) -> Config raise MailsError
 
 pub async fn load_env_file(String) -> EnvFile raise MailsError
+
+pub async fn load_refresh_token(String, String) -> String? raise MailsError
 
 pub fn log_debug(String) -> Unit
 
@@ -78,6 +86,10 @@ pub fn message_body_text_with_headers(Array[(String, String)], Bytes) -> String
 
 pub fn needs_key(String) -> Bool
 
+pub fn oauth_provider_defaults(String, String) -> (String, String, String) raise MailsError
+
+pub fn oauth_settings_for(Account, String) -> OAuthSettings raise MailsError
+
 pub fn open_secret(String, String) -> String raise MailsError
 
 pub fn parse_config(String, String) -> Config raise MailsError
@@ -90,9 +102,15 @@ pub fn parse_headers(String) -> Array[(String, String)]
 
 pub fn parse_match_field(String) -> MatchField?
 
+pub async fn poll_device_token(OAuthSettings, DeviceAuthorization, () -> Unit) -> TokenSet raise MailsError
+
+pub async fn refresh_access_token(OAuthSettings, String) -> TokenSet raise MailsError
+
 pub fn render_env_for_display(EnvFile, Bool) -> String
 
 pub fn render_template(String, ActionContext) -> String
+
+pub async fn request_device_code(OAuthSettings) -> DeviceAuthorization raise MailsError
 
 pub fn resolve_secret(String, String) -> String raise MailsError
 
@@ -103,6 +121,8 @@ pub async fn run_action(String, String, MailMessage, RuleMatch) -> ActionOutcome
 pub async fn run_watch(Config, Array[Account], String, Bool) -> Unit
 
 pub fn sample_config() -> String
+
+pub async fn save_refresh_token(String, Account, String, String) -> Unit raise MailsError
 
 pub async fn seal_secret(String, String) -> String raise MailsError
 
@@ -118,11 +138,15 @@ pub fn split_header_body(String) -> (Array[(String, String)], String)
 
 pub fn string_to_bytes(String) -> Bytes
 
+pub fn token_path(Account, String) -> String
+
 pub fn trim(StringView) -> String
 
 pub fn truncate_chars(String, Int32) -> String
 
 pub fn update_account_password(String, String, String) -> String raise MailsError
+
+pub fn xoauth2_initial_response(String, String) -> String
 
 // Errors
 pub suberror IdleUnsupported
@@ -144,6 +168,14 @@ pub struct Account {
   password : String
   use_tls : Bool
   tls_verify : Bool
+  auth : AuthKind
+  oauth_provider : String
+  oauth_client_id : String
+  oauth_tenant : String
+  oauth_scope : String
+  oauth_device_endpoint : String
+  oauth_token_endpoint : String
+  oauth_token_file : String
   mailboxes : Array[String]
   rules : Array[Rule]
   startup_sync : Bool
@@ -165,6 +197,11 @@ pub struct ActionOutcome {
   timed_out : Bool
 }
 
+pub enum AuthKind {
+  PasswordLogin
+  OAuth2Login
+}
+
 pub struct Config {
   path : String
   dir : String
@@ -175,6 +212,11 @@ pub struct Config {
   accounts : Array[Account]
 }
 
+pub enum Credential {
+  Password(String)
+  Bearer(String)
+}
+
 pub struct Defaults {
   startup_sync : Bool
   idle_timeout_ms : Int32
@@ -182,6 +224,16 @@ pub struct Defaults {
   max_body_bytes : Int32
   command_timeout_ms : Int32
   body_chars : Int32
+}
+
+pub struct DeviceAuthorization {
+  device_code : String
+  user_code : String
+  verification_uri : String
+  verification_uri_complete : String
+  interval_ms : Int32
+  expires_in_s : Int32
+  message : String
 }
 
 pub struct EnvFile {
@@ -204,9 +256,11 @@ pub struct ImapClient {
   mut tag_counter : Int32
   mut capabilities : Array[String]
 }
+pub async fn ImapClient::authenticate_xoauth2(Self, String, String) -> Unit
 pub async fn ImapClient::check(Self, String) -> MailboxStatus
 pub async fn ImapClient::close(Self) -> Unit
 pub async fn ImapClient::connect(String, Int32, Bool, Bool, String, String) -> Self
+pub async fn ImapClient::connect_with(String, Int32, Bool, Bool, String, Credential) -> Self
 pub async fn ImapClient::fetch_message(Self, String, Int32) -> FetchedMessage?
 pub fn ImapClient::has_capability(Self, String) -> Bool
 pub async fn ImapClient::idle(Self, Int32) -> Bool
@@ -264,6 +318,16 @@ pub struct MimeText {
   mut html : String
 }
 
+pub struct OAuthSettings {
+  provider : String
+  client_id : String
+  tenant : String
+  scope : String
+  device_endpoint : String
+  token_endpoint : String
+  token_file : String
+}
+
 pub struct Rule {
   name : String
   accounts : Array[String]
@@ -289,9 +353,16 @@ pub struct RuleMatch {
 pub struct Runtime {
   account : Account
   rules : Array[Rule]
-  password : String
+  config_dir : String
+  key : String
   once : Bool
   failed : @ref.Ref[Bool]
+}
+
+pub struct TokenSet {
+  access_token : String
+  refresh_token : String
+  expires_at_ms : Int64
 }
 
 // Type aliases

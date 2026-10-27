@@ -414,7 +414,78 @@ async fn execute(client : ImapClient, command : String) -> ImapReply {
 }
 
 ///|
-/// Open a connection and log in.
+/// How to prove identity to the server.
+pub enum Credential {
+  /// IMAP `LOGIN` with a password or app password.
+  Password(String)
+  /// SASL `XOAUTH2` with an OAuth2 access token.
+  Bearer(String)
+}
+
+///|
+/// The SASL initial response for XOAUTH2 (Gmail and Microsoft both accept it):
+/// `user=<account>\x01auth=Bearer <token>\x01\x01`, base64 encoded.
+pub fn xoauth2_initial_response(
+  username : String,
+  access_token : String,
+) -> String {
+  base64_encode(
+    string_to_bytes(
+      "user=" + username + "\u{1}auth=Bearer " + access_token + "\u{1}\u{1}",
+    ),
+  )
+}
+
+///|
+/// Authenticate with an OAuth2 access token.
+///
+/// The server either answers `OK` straight away or, on failure, sends a `+`
+/// continuation carrying a base64 JSON error. In the latter case the client
+/// must send an empty line to let the server finish with its tagged `NO`.
+pub async fn ImapClient::authenticate_xoauth2(
+  client : ImapClient,
+  username : String,
+  access_token : String,
+) -> Unit {
+  let tag = next_tag(client)
+  let response = xoauth2_initial_response(username, access_token)
+  let line = tag + " AUTHENTICATE XOAUTH2 " + response + "\r\n"
+  stream_write(client.stream, string_to_bytes(line))
+  let mut finished = false
+  while !finished {
+    let reply = read_logical_line(client.stream)
+    let head = reply.text
+    if head.has_prefix(tag + " ") {
+      let rest = head[tag.length() + 1:].to_owned()
+      let parts = tokens(rest)
+      let status = if parts.length() > 0 { parts[0].to_upper() } else { "BAD" }
+      let text = if parts.length() > 0 {
+        rest[parts[0].length():].to_owned()
+      } else {
+        rest
+      }
+      if status == "OK" {
+        finished = true
+      } else {
+        raise ImapProtocolError(
+          "server rejected 'AUTHENTICATE XOAUTH2 <redacted>': " +
+          status +
+          " " +
+          text,
+        )
+      }
+    } else if head.has_prefix("+") {
+      // An error challenge; answer with an empty line to close the exchange.
+      stream_write(client.stream, string_to_bytes("\r\n"))
+    } else {
+      // Untagged line; keep reading until the tagged reply arrives.
+      continue
+    }
+  }
+}
+
+///|
+/// Open a connection and log in with a password.
 pub async fn ImapClient::connect(
   host : String,
   port : Int32,
@@ -422,6 +493,26 @@ pub async fn ImapClient::connect(
   verify_tls : Bool,
   username : String,
   password : String,
+) -> ImapClient {
+  ImapClient::connect_with(
+    host,
+    port,
+    use_tls,
+    verify_tls,
+    username,
+    Password(password),
+  )
+}
+
+///|
+/// Open a connection and authenticate with any credential.
+pub async fn ImapClient::connect_with(
+  host : String,
+  port : Int32,
+  use_tls : Bool,
+  verify_tls : Bool,
+  username : String,
+  credential : Credential,
 ) -> ImapClient {
   let tcp = @socket.Tcp::connect_to_host(host, port~) catch {
     err =>
@@ -455,8 +546,16 @@ pub async fn ImapClient::connect(
   match response_code(greeting.to_upper(), "CAPABILITY") {
     _ => ()
   }
-  let login_cmd = "LOGIN " + imap_quote(username) + " " + imap_quote(password)
-  ignore(execute(client, login_cmd))
+  match credential {
+    Password(password) => {
+      let login_cmd = "LOGIN " +
+        imap_quote(username) +
+        " " +
+        imap_quote(password)
+      ignore(execute(client, login_cmd))
+    }
+    Bearer(access_token) => client.authenticate_xoauth2(username, access_token)
+  }
   let caps = execute(client, "CAPABILITY")
   let capabilities : Array[String] = []
   for line in reply_texts(caps) {

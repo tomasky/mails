@@ -62,6 +62,14 @@ pub struct Account {
   password : String
   use_tls : Bool
   tls_verify : Bool
+  auth : AuthKind
+  oauth_provider : String
+  oauth_client_id : String
+  oauth_tenant : String
+  oauth_scope : String
+  oauth_device_endpoint : String
+  oauth_token_endpoint : String
+  oauth_token_file : String
   mailboxes : Array[String]
   rules : Array[Rule]
   startup_sync : Bool
@@ -619,6 +627,84 @@ fn parse_account(
     }
     None => defaults.max_body_bytes
   }
+  let auth = match read_string(table, "auth", what + "auth") {
+    Some(text) => {
+      let kind = trim(text).to_lower()
+      if kind == "xoauth2" || kind == "oauth2" || kind == "oauth" {
+        OAuth2Login
+      } else if kind == "password" || kind == "login" || kind == "" {
+        PasswordLogin
+      } else {
+        raise MailsError(
+          what + "auth must be \"password\" or \"xoauth2\", not '" + text + "'",
+        )
+      }
+    }
+    None => PasswordLogin
+  }
+  let oauth_provider = match
+    read_string(table, "oauth_provider", what + "oauth_provider") {
+    Some(text) => trim(text)
+    None => ""
+  }
+  let oauth_client_id = match
+    read_string(table, "oauth_client_id", what + "oauth_client_id") {
+    Some(text) => trim(text)
+    None => ""
+  }
+  let oauth_tenant = match
+    read_string(table, "oauth_tenant", what + "oauth_tenant") {
+    Some(text) => trim(text)
+    None => ""
+  }
+  let oauth_scope = match
+    read_string(table, "oauth_scope", what + "oauth_scope") {
+    Some(text) => trim(text)
+    None => ""
+  }
+  let oauth_device_endpoint = match
+    read_string(table, "oauth_device_endpoint", what + "oauth_device_endpoint") {
+    Some(text) => trim(text)
+    None => ""
+  }
+  let oauth_token_endpoint = match
+    read_string(table, "oauth_token_endpoint", what + "oauth_token_endpoint") {
+    Some(text) => trim(text)
+    None => ""
+  }
+  let oauth_token_file = match
+    read_string(table, "oauth_token_file", what + "oauth_token_file") {
+    Some(text) => trim(text)
+    None => ""
+  }
+  if auth is OAuth2Login {
+    let provider = if is_blank(oauth_provider) {
+      "microsoft"
+    } else {
+      oauth_provider
+    }
+    if provider == "custom" {
+      if is_blank(oauth_device_endpoint) ||
+        is_blank(oauth_token_endpoint) ||
+        is_blank(oauth_scope) {
+        raise MailsError(
+          what +
+          "auth = \"xoauth2\" with oauth_provider = \"custom\" needs " +
+          "oauth_device_endpoint, oauth_token_endpoint and oauth_scope",
+        )
+      }
+    } else if provider != "microsoft" && provider != "google" {
+      raise MailsError(
+        what +
+        "oauth_provider must be \"microsoft\", \"google\" or \"custom\", not '" +
+        provider +
+        "'",
+      )
+    }
+    if is_blank(oauth_client_id) {
+      raise MailsError(what + "auth = \"xoauth2\" needs oauth_client_id")
+    }
+  }
   let rules = parse_rules(table, defaults, what + "rules")
   {
     name,
@@ -628,6 +714,14 @@ fn parse_account(
     password,
     use_tls,
     tls_verify,
+    auth,
+    oauth_provider,
+    oauth_client_id,
+    oauth_tenant,
+    oauth_scope,
+    oauth_device_endpoint,
+    oauth_token_endpoint,
+    oauth_token_file,
     mailboxes,
     rules,
     startup_sync,

@@ -1,7 +1,7 @@
 ///| The `mails` command-line interface.
 
 ///|
-let cli_version : String = "0.1.3"
+let cli_version : String = "0.1.4"
 
 ///|
 priv struct CliOptions {
@@ -11,6 +11,7 @@ priv struct CliOptions {
   mut write : Bool
   mut new_key : Bool
   mut once : Bool
+  mut no_verify : Bool
   mut help : Bool
 }
 
@@ -23,6 +24,7 @@ fn default_options() -> CliOptions {
     write: false,
     new_key: false,
     once: false,
+    no_verify: false,
     help: false,
   }
 }
@@ -66,6 +68,8 @@ fn parse_args(argv : Array[String]) -> CliOptions raise {
       opts.new_key = true
     } else if arg == "--once" {
       opts.once = true
+    } else if arg == "--no-verify" {
+      opts.no_verify = true
     } else if arg == "--help" || arg == "-h" {
       opts.help = true
     } else if arg == "--version" || arg == "-V" {
@@ -99,6 +103,7 @@ async fn print_help() -> Unit {
     "  watch              follow mailboxes with IMAP IDLE",
     "  sync               process existing matching mail once, then exit",
     "  check              verify the config, key and IMAP logins",
+    "  login              sign in to an OAuth2 account (device code, no browser)",
     "  encrypt            encrypt an account password with the key in .env",
     "  keygen             create the encryption key in .env",
     "  rules              list the configured keyword rules",
@@ -109,6 +114,7 @@ async fn print_help() -> Unit {
     "options:",
     "  -c, --config PATH  configuration file (default: mails.toml next to the binary)",
     "  -a, --account NAME only this account",
+    "      --no-verify    for login: do not test the IMAP connection afterwards",
     "      --once         for watch: process existing mail, then exit",
     "      --write        for encrypt: update mails.toml in place",
     "      --new-key      for encrypt: rotate the key before sealing",
@@ -366,6 +372,93 @@ async fn cmd_init(opts : CliOptions) -> Unit {
 }
 
 ///|
+/// Sign in to an OAuth2 account with the device authorization grant.
+///
+/// Designed for a machine with no browser: it prints a URL and a short code,
+/// the user approves them on any device, and this process polls until the
+/// provider hands over a token.
+async fn cmd_login(opts : CliOptions) -> Unit {
+  let (config, _env, key) = config_and_env(opts)
+  let accounts = selected_accounts(config, opts.account) catch {
+    err => raise cli_error(error_message(err))
+  }
+  if accounts.length() == 0 {
+    raise cli_error("no accounts selected")
+  }
+  for account in accounts {
+    if account.auth is PasswordLogin {
+      print_line(
+        account.name + ": uses a password, nothing to do (auth = \"password\")",
+      )
+      continue
+    }
+    let settings = oauth_settings_for(account, config.dir) catch {
+      err => raise cli_error(account.name + ": " + error_message(err))
+    }
+    let authorization = request_device_code(settings) catch {
+      err => raise cli_error(account.name + ": " + error_message(err))
+    }
+    print_line(account.name + ": sign in to " + settings.provider)
+    print_line("  1. open " + authorization.verification_uri)
+    if authorization.verification_uri_complete != "" {
+      print_line(
+        "     (or directly: " + authorization.verification_uri_complete + ")",
+      )
+    }
+    print_line("  2. enter the code: " + authorization.user_code)
+    if authorization.message != "" {
+      print_line("     " + authorization.message)
+    }
+    print_line(
+      "  waiting up to " +
+      (authorization.expires_in_s / 60).to_string() +
+      " minutes for approval (Ctrl-C to abort)...",
+    )
+    let mut polls = 0
+    let tokens = poll_device_token(settings, authorization, () => {
+      polls = polls + 1
+    }) catch {
+      err => raise cli_error(account.name + ": " + error_message(err))
+    }
+    if is_blank(tokens.refresh_token) {
+      raise cli_error(
+        account.name +
+        ": the provider did not return a refresh token; check that 'offline_access' is in oauth_scope",
+      )
+    }
+    if polls > 1 {
+      print_line("  approved after " + polls.to_string() + " checks")
+    }
+    let path = token_path(account, config.dir)
+    save_refresh_token(path, account, tokens.refresh_token, key) catch {
+      err => raise cli_error(account.name + ": " + error_message(err))
+    }
+    print_line("  saved the refresh token to " + path)
+    // Seed the in-process cache so the verification below does not refresh
+    // the token a second time.
+    access_token_cache.set(account.name, tokens)
+    if opts.no_verify {
+      continue
+    }
+    let failure : Error? = (() => {
+      check_account(account, key, config.dir)
+      None
+    })() catch {
+      err => Some(err)
+    }
+    match failure {
+      Some(err) =>
+        raise cli_error(
+          account.name +
+          ": signed in, but IMAP still fails: " +
+          error_message(err),
+        )
+      None => print_line("  IMAP login ok")
+    }
+  }
+}
+
+///|
 async fn cmd_check(opts : CliOptions) -> Unit {
   let (config, _env, key) = config_and_env(opts)
   print_line("config: " + config.path)
@@ -392,7 +485,7 @@ async fn cmd_check(opts : CliOptions) -> Unit {
   let mut failures = 0
   for account in accounts {
     let failure : Error? = (() => {
-      check_account(account, key)
+      check_account(account, key, config.dir)
       None
     })() catch {
       err => Some(err)
@@ -412,32 +505,27 @@ async fn cmd_check(opts : CliOptions) -> Unit {
 }
 
 ///|
-async fn check_account(account : Account, key : String) -> Unit {
-  if account.password == "" {
-    raise cli_error(
-      "account '" +
-      account.name +
-      "' has no password; run `mails encrypt --account " +
-      account.name +
-      " --write`",
-    )
-  }
-  let password = resolve_secret(key, account.password) catch {
+async fn check_account(
+  account : Account,
+  key : String,
+  config_dir : String,
+) -> Unit {
+  let credential = credential_for(account, config_dir, key) catch {
     err =>
       raise cli_error(
-        "cannot decrypt the password for '" +
+        "cannot prepare credentials for '" +
         account.name +
         "': " +
         error_message(err),
       )
   }
-  let client = ImapClient::connect(
+  let client = ImapClient::connect_with(
     account.host,
     account.port,
     account.use_tls,
     account.tls_verify,
     account.username,
-    password,
+    credential,
   )
   let failure : Error? = (() => {
     for mailbox in account.mailboxes {
@@ -512,6 +600,7 @@ async fn dispatch(opts : CliOptions) -> Unit {
       cmd_watch(opts)
     }
     "check" => cmd_check(opts)
+    "login" => cmd_login(opts)
     "encrypt" => cmd_encrypt(opts)
     "keygen" => cmd_keygen(opts)
     "rules" => cmd_rules(opts)

@@ -53,6 +53,41 @@ exec = ["/usr/local/bin/on-boss-mail", "--subject", "{{subject_q}}"]
 #   Proton (Bridge)     127.0.0.1 port 1143      (tls_verify = false)
 #   Zoho                imap.zoho.com
 #   GMX                 imap.gmx.com
+# --- OAuth2 accounts (Outlook / Microsoft 365 / Gmail) -----------------------
+#
+# Microsoft disabled password (basic) authentication for IMAP, and Google
+# requires OAuth2 too, so `password` cannot be used for those accounts. Set
+# `auth = "xoauth2"` instead: `mails login` prints a URL and a short code, you
+# approve it on any device (phone, another machine) and no browser is needed on
+# the server. The refresh token is stored next to this file.
+#
+# [accounts.outlook]
+# host = "outlook.office365.com"
+# port = 993
+# username = "me@outlook.com"
+# auth = "xoauth2"
+# oauth_provider = "microsoft"        # or "google" or "custom"
+# # oauth_tenant = "consumers"        # default "common"; use your tenant id for work accounts
+# oauth_client_id = "YOUR-APP-CLIENT-ID"
+# # oauth_token_file = ".outlook.oauth"   # default: .<account name>.oauth
+# mailboxes = ["INBOX"]
+#
+# # Google equivalent:
+# oauth_provider = "google"
+# oauth_scope = "https://mail.google.com/"
+#
+# # Any other provider that supports the device grant (RFC 8628):
+# oauth_provider = "custom"
+# oauth_device_endpoint = "https://example.com/device/code"
+# oauth_token_endpoint = "https://example.com/token"
+# oauth_scope = "imap"
+#
+# The client id must be registered as a *public* client with the device code
+# flow enabled. For Microsoft, register an app in Entra ID, add the delegated
+# permission "IMAP.AccessAsUser.All" (Office 365 Exchange Online) and enable
+# "Allow public client flows". Anyone can sign in with their own account; the
+# refresh token never leaves this machine.
+
 [accounts.work]
 host = "imap.example.com"
 port = 993
