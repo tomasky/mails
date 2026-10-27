@@ -23,6 +23,8 @@
 #   MAILS_OPENSSL_SRC      OpenSSL source tree to build the static libs from
 #                          (default: download and build one in the workdir)
 #   MAILS_OPENSSL_VERSION  OpenSSL version to download (default: 3.5.5)
+#   MAILS_OPENSSL_TARGET   OpenSSL Configure target (default: derived from
+#                          `uname -m`, e.g. linux-x86_64 or linux-aarch64)
 #   MAILS_OPENSSL_MUSL     install prefix of a prebuilt musl static OpenSSL
 #                          (skips building it; must contain include/ and lib/)
 #   MAILS_NO_TLS           set to 1 to build without TLS support
@@ -38,6 +40,19 @@ work="${MAILS_MUSL_WORKDIR:-$(mktemp -d)}"
 openssl_version="${MAILS_OPENSSL_VERSION:-3.5.5}"
 use_tls="${MAILS_NO_TLS:+0}"
 use_tls="${use_tls:-1}"
+
+# OpenSSL's Configure target must match the machine we are building on: the
+# release matrix builds on both x86_64 and aarch64 runners, and a hardcoded
+# `linux-x86_64` emits `-m64`, which the aarch64 compiler rejects with
+# "unrecognized command-line option '-m64'".
+if [ -z "${MAILS_OPENSSL_TARGET:-}" ]; then
+  case "$(uname -m)" in
+  x86_64 | amd64) MAILS_OPENSSL_TARGET=linux-x86_64 ;;
+  aarch64 | arm64) MAILS_OPENSSL_TARGET=linux-aarch64 ;;
+  *) MAILS_OPENSSL_TARGET=linux-generic64 ;;
+  esac
+fi
+openssl_target="$MAILS_OPENSSL_TARGET"
 
 say() { printf '%s\n' "$*"; }
 die() {
@@ -71,7 +86,7 @@ openssl_prefix="${MAILS_OPENSSL_MUSL:-$work/openssl-musl}"
 
 build_openssl() {
   local src="$1"
-  say "mails: building static OpenSSL $openssl_version (musl)"
+  say "mails: building static OpenSSL $openssl_version for $openssl_target (musl)"
   (
     cd "$src"
     make clean >/dev/null 2>&1 || true
@@ -79,7 +94,7 @@ build_openssl() {
     # no-shared/no-dso remove the dynamic-loading code paths entirely.
     CC=musl-gcc \
       CFLAGS="-idirafter /usr/include -idirafter $multiarch" \
-      ./Configure linux-x86_64 -static \
+      ./Configure "$openssl_target" -static \
         --prefix="$openssl_prefix" \
         --openssldir="$openssl_prefix/ssl" \
         no-shared no-dso no-tests no-zlib no-zstd no-asm no-async
