@@ -92,7 +92,7 @@ already develop with MoonBit.
 curl -LsSf https://raw.githubusercontent.com/tomasky/mails/master/install.sh | bash
 ```
 
-No Node.js or MoonBit required. The script accepts `--version 0.1.1`,
+No Node.js or MoonBit required. The script accepts `--version 0.1.2`,
 `--install-dir DIR` and `--no-verify`, and verifies the published SHA-256
 before installing. By default it installs into `~/.local/bin`.
 
@@ -137,7 +137,7 @@ See [Building](#building) for the static Linux build and tests.
 
 ## Releases
 
-Releases are tagged `v<version>` (for example `v0.1.1`). Each release publishes
+Releases are tagged `v<version>` (for example `v0.1.2`). Each release publishes
 one binary per target plus its `.sha256` checksum; there are no archives,
 because the installer, the npm launcher and `curl` all want the bare binary.
 Source archives are provided by GitHub for every tag.
@@ -217,6 +217,49 @@ mailboxes = ["INBOX", "Work"]
 
 Rules can be global (`[[rules]]`) or per account
 (`[[accounts.work.rules]]`). Global rules run first, then the account's rules.
+
+### IMAP hosts for common providers
+
+Most providers use SSL on port 993; set `tls = true` and keep `tls_verify =
+true`. Use an app-specific password where the provider requires one (Gmail,
+iCloud, Fastmail, Yahoo, and most others with 2FA).
+
+| Provider | `host` | `port` | `tls` | Notes |
+| --- | --- | --- | --- | --- |
+| Gmail / Google Workspace | `imap.gmail.com` | 993 | `true` | Needs an App Password with 2FA; "less secure apps" is gone |
+| Outlook / Microsoft 365 | `outlook.office365.com` | 993 | `true` | OAuth2-only for many tenants; basic auth is being retired |
+| Yahoo Mail | `imap.mail.yahoo.com` | 993 | `true` | App Password required |
+| iCloud Mail | `imap.mail.me.com` | 993 | `true` | Apple ID app-specific password |
+| Fastmail | `imap.fastmail.com` | 993 | `true` | App password recommended |
+| Proton Mail | `127.0.0.1` | 1143 | `true` | Via Proton Mail Bridge (local, self-signed → `tls_verify = false`) |
+| Zoho Mail | `imap.zoho.com` | 993 | `true` | App-specific password with 2FA |
+| GMX | `imap.gmx.com` | 993 | `true` | |
+| AOL Mail | `imap.aol.com` | 993 | `true` | |
+| Dovecot / self-hosted | your server | 993 | `true` | `tls_verify = false` only for self-signed certs |
+
+Outlook/Microsoft 365 and Gmail increasingly require OAuth2, which `mails`
+does not implement; if basic auth (an app password) is disabled for your
+tenant, `mails` cannot log in.
+
+```toml
+[accounts.gmail]
+host = "imap.gmail.com"
+port = 993
+username = "you@gmail.com"
+password = "enc:v1:..."     # an App Password, sealed with `mails encrypt`
+mailboxes = ["INBOX"]
+tls = true
+tls_verify = true
+
+[accounts.fastmail]
+host = "imap.fastmail.com"
+port = 993
+username = "you@fastmail.com"
+password = "enc:v1:..."
+mailboxes = ["INBOX", "Sent"]
+tls = true
+tls_verify = true
+```
 
 ### Rule keys
 
@@ -435,6 +478,22 @@ linking against musl statically removes that entire class of problem.
 sudo apt-get install musl-tools
 ./scripts/build-linux-static.sh dist/mails-linux-x86_64
 ```
+
+The static binary keeps TLS. `moonbitlang/async` normally loads OpenSSL with
+`dlopen`, which cannot work in a statically linked program, so a static build
+used to fail every TLS connection with `TlsError("failed to load OpenSSL")`.
+The script instead builds (or reuses) a musl OpenSSL and links it in,
+compiling async's TLS stub from `scripts/tls/openssl_static.c` — a copy of the
+upstream loader whose only change is that it references the OpenSSL symbols
+directly instead of resolving them at runtime.
+
+| Variable | Meaning |
+| --- | --- |
+| `MAILS_MUSL_WORKDIR` | scratch directory (default: a fresh temp dir) |
+| `MAILS_OPENSSL_VERSION` | OpenSSL to download and build (default `3.5.5`) |
+| `MAILS_OPENSSL_SRC` | build the static libs from this source tree |
+| `MAILS_OPENSSL_MUSL` | use a prebuilt musl static OpenSSL prefix (`include/`, `lib/`) |
+| `MAILS_NO_TLS=1` | build without TLS (smaller; IMAP over TLS won't work) |
 
 ## Differences from goimapnotify
 

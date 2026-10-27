@@ -44,6 +44,15 @@ keyword = "boss@example.com"
 fields = ["from"]
 exec = ["/usr/local/bin/on-boss-mail", "--subject", "{{subject_q}}"]
 
+# IMAP hosts for common providers (all use SSL on port 993):
+#   Gmail / Workspace   imap.gmail.com          (App Password required)
+#   Outlook / M365      outlook.office365.com   (often OAuth2-only)
+#   Yahoo               imap.mail.yahoo.com      (App Password required)
+#   iCloud              imap.mail.me.com         (app-specific password)
+#   Fastmail            imap.fastmail.com
+#   Proton (Bridge)     127.0.0.1 port 1143      (tls_verify = false)
+#   Zoho                imap.zoho.com
+#   GMX                 imap.gmx.com
 [accounts.work]
 host = "imap.example.com"
 port = 993

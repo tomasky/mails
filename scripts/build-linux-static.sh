@@ -7,19 +7,37 @@
 # ("GLIBC_2.38 not found"). Linking against musl statically removes the whole
 # class of problem: the result runs on any Linux of the same architecture.
 #
+# TLS: moonbitlang/async loads OpenSSL with dlopen(3), which cannot work in a
+# statically linked program ("Dynamic loading not supported"), so a static
+# build used to fail every TLS connection with `TlsError("failed to load
+# OpenSSL")`. To keep TLS working we link OpenSSL statically and compile
+# async's TLS stub from scripts/tls/openssl_static.c, a copy of the upstream
+# `openssl.c` whose only difference is that it references the OpenSSL symbols
+# directly instead of resolving them with dlsym.
+#
 # Usage:
 #   scripts/build-linux-static.sh [output-path]
 #
 # Environment:
-#   MAILS_MUSL_WORKDIR   scratch directory (default: a fresh temp dir)
+#   MAILS_MUSL_WORKDIR     scratch directory (default: a fresh temp dir)
+#   MAILS_OPENSSL_SRC      OpenSSL source tree to build the static libs from
+#                          (default: download and build one in the workdir)
+#   MAILS_OPENSSL_VERSION  OpenSSL version to download (default: 3.5.5)
+#   MAILS_OPENSSL_MUSL     install prefix of a prebuilt musl static OpenSSL
+#                          (skips building it; must contain include/ and lib/)
+#   MAILS_NO_TLS           set to 1 to build without TLS support
 #
-# Requires: musl-tools (Debian/Ubuntu: `apt-get install musl-tools`).
+# Requires: musl-tools (Debian/Ubuntu: `apt-get install musl-tools`), plus
+# perl and make when OpenSSL has to be built.
 
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 out="${1:-$root/dist/mails-linux-$(uname -m)}"
 work="${MAILS_MUSL_WORKDIR:-$(mktemp -d)}"
+openssl_version="${MAILS_OPENSSL_VERSION:-3.5.5}"
+use_tls="${MAILS_NO_TLS:+0}"
+use_tls="${use_tls:-1}"
 
 say() { printf '%s\n' "$*"; }
 die() {
@@ -43,6 +61,58 @@ done
 [ -n "$multiarch" ] || die "no /usr/include/*-linux-gnu directory found"
 
 mkdir -p "$work"
+
+# --- static OpenSSL --------------------------------------------------------
+# Produces $openssl_prefix with lib/libssl.a, lib/libcrypto.a and include/.
+# The archives must be built with musl: the distro's libssl.a/libcrypto.a are
+# glibc objects, and mixing them into a musl binary drags in glibc-only
+# runtime dependencies (zlib, zstd, dlopen) that defeat the point.
+openssl_prefix="${MAILS_OPENSSL_MUSL:-$work/openssl-musl}"
+
+build_openssl() {
+  local src="$1"
+  say "mails: building static OpenSSL $openssl_version (musl)"
+  (
+    cd "$src"
+    make clean >/dev/null 2>&1 || true
+    # no-zlib/no-zstd keeps libcrypto.a free of external compression deps;
+    # no-shared/no-dso remove the dynamic-loading code paths entirely.
+    CC=musl-gcc \
+      CFLAGS="-idirafter /usr/include -idirafter $multiarch" \
+      ./Configure linux-x86_64 -static \
+        --prefix="$openssl_prefix" \
+        --openssldir="$openssl_prefix/ssl" \
+        no-shared no-dso no-tests no-zlib no-zstd no-asm no-async
+    make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)" build_sw
+    # Copy the two archives and the headers instead of `make install`, which
+    # also spends minutes generating man pages we never read.
+    mkdir -p "$openssl_prefix/lib" "$openssl_prefix/include"
+    cp libssl.a libcrypto.a "$openssl_prefix/lib/"
+    cp -R include/openssl "$openssl_prefix/include/"
+  )
+}
+
+if [ "$use_tls" = 1 ]; then
+  if [ -n "${MAILS_OPENSSL_MUSL:-}" ]; then
+    [ -f "$openssl_prefix/lib/libssl.a" ] &&
+      [ -f "$openssl_prefix/lib/libcrypto.a" ] ||
+      die "MAILS_OPENSSL_MUSL=$openssl_prefix has no lib/libssl.a + lib/libcrypto.a"
+  elif [ -n "${MAILS_OPENSSL_SRC:-}" ]; then
+    build_openssl "$MAILS_OPENSSL_SRC"
+  else
+    command -v perl >/dev/null 2>&1 || die "perl is required to configure OpenSSL"
+    src="$work/openssl-$openssl_version"
+    if [ ! -d "$src" ]; then
+      tarball="$work/openssl-$openssl_version.tar.gz"
+      say "mails: downloading OpenSSL $openssl_version"
+      curl -fsSL -o "$tarball" \
+        "https://github.com/openssl/openssl/releases/download/openssl-$openssl_version/openssl-$openssl_version.tar.gz" ||
+        die "cannot download OpenSSL $openssl_version"
+      tar -xzf "$tarball" -C "$work"
+    fi
+    build_openssl "$src"
+  fi
+fi
 
 # --- fortify shim ----------------------------------------------------------
 # The MoonBit runtime is compiled against glibc headers and references the
@@ -72,6 +142,10 @@ musl-gcc -O2 -c "$work/fortify_shim.c" -o "$work/fortify_shim.o"
 ar rcs "$work/libmbfortify.a" "$work/fortify_shim.o"
 
 # --- compiler driver -------------------------------------------------------
+tls_flags=""
+if [ "$use_tls" = 1 ]; then
+  tls_flags="-L$openssl_prefix/lib -lssl -lcrypto -ldl -lpthread"
+fi
 cat >"$work/mails-musl-gcc" <<EOF
 #!/bin/sh
 # -idirafter keeps musl's libc headers ahead of glibc's while still making the
@@ -85,10 +159,28 @@ for arg in "\$@"; do
   fi
 done
 # shellcheck disable=SC2086
-exec musl-gcc \$common "\$@" -static -L$work -lmbfortify
+exec musl-gcc \$common "\$@" -static -L$work -lmbfortify $tls_flags
 EOF
 chmod +x "$work/mails-musl-gcc"
 ln -sf "$(command -v ar)" "$work/ar"
+
+# --- TLS stub --------------------------------------------------------------
+# Swap async's dlopen-based loader for the directly-linked one. The dependency
+# lives under .mooncakes (gitignored, regenerated by `moon`), so the swap is
+# restored on exit and never becomes part of the source tree.
+async_tls_dir="$root/.mooncakes/moonbitlang/async/src/tls"
+restore_tls_stub() {
+  if [ -f "$async_tls_dir/openssl.c.mails-orig" ]; then
+    mv -f "$async_tls_dir/openssl.c.mails-orig" "$async_tls_dir/openssl.c"
+  fi
+}
+if [ "$use_tls" = 1 ]; then
+  [ -d "$async_tls_dir" ] ||
+    die "$async_tls_dir is missing; run 'moon update' first"
+  cp "$async_tls_dir/openssl.c" "$async_tls_dir/openssl.c.mails-orig"
+  cp "$root/scripts/tls/openssl_static.c" "$async_tls_dir/openssl.c"
+  trap restore_tls_stub EXIT
+fi
 
 # --- build -----------------------------------------------------------------
 say "mails: building a static binary (musl, workdir $work)"
@@ -113,3 +205,20 @@ if ldd "$out" >/dev/null 2>&1; then
   die "$out is a dynamic executable"
 fi
 say "mails: verified statically linked"
+
+# A static binary must carry its TLS stack; confirm OpenSSL really was linked
+# in rather than silently dropped. Capture the symbol table first: piping nm
+# into `grep -q` would make grep exit early, SIGPIPE kill nm, and `pipefail`
+# turn a successful match into a failure.
+if [ "$use_tls" = 1 ]; then
+  if command -v nm >/dev/null 2>&1; then
+    symbols="$(nm "$out" 2>/dev/null || true)"
+    case "$symbols" in
+    *" T SSL_connect"*) ;;
+    *) die "$out has no static OpenSSL symbols (TLS would fail at runtime)" ;;
+    esac
+  fi
+  say "mails: verified static TLS (OpenSSL $openssl_version)"
+else
+  say "mails: built without TLS (MAILS_NO_TLS=1)"
+fi
