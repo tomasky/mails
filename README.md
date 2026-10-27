@@ -239,6 +239,7 @@ iCloud, Fastmail, Yahoo, and most others with 2FA).
 | Mail.ru | `imap.mail.ru` | 993 | `true` | App password required |
 | QQ Mail | `imap.qq.com` | 993 | `true` | Enable IMAP and create an authorisation code (授权码) in the web settings; use that code as `password` |
 | 163 / 126 Mail | `imap.163.com` | 993 | `true` | Enable IMAP and set a client authorisation password (客户端授权密码) |
+| Tencent Exmail (企业微信邮箱) | `imap.exmail.qq.com` | 993 | `true` | Admin must allow IMAP in the WeCom console; then enable it under 设置 → 收发信设置 and generate a client password (客户端专用密码) |
 | Sina Mail | `imap.sina.com` | 993 | `true` | Enable IMAP in the web settings |
 | Dovecot / self-hosted | your server | 993 | `true` | `tls_verify = false` only for self-signed certs |
 
