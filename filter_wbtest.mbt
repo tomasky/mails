@@ -52,6 +52,17 @@ test "keywords also match the body" {
 }
 
 ///|
+test "a keyword matches across a line break in the body" {
+  let rule : Rule = {
+    ..sample_rule(),
+    keywords: ["payment due"],
+    ignore_case: false,
+  }
+  let message = sample_message("hello", "Your payment\ndue today")
+  assert_true(match_rule(rule, message) is Some(_))
+}
+
+///|
 test "case sensitivity is configurable" {
   let sensitive : Rule = { ..sample_rule(), ignore_case: false, }
   assert_true(match_rule(sensitive, sample_message("INVOICE", "")) is None)

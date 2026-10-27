@@ -49,9 +49,14 @@ fn keyword_matches(
       None => false
     }
   } else if ignore_case {
-    haystack.to_lower().contains(keyword.to_lower())
+    // The body keeps the line breaks of the original message, so whitespace is
+    // squeezed on both sides: a keyword written with a space still matches a
+    // phrase the sender wrapped over two lines.
+    collapse_whitespace(haystack)
+    .to_lower()
+    .contains(collapse_whitespace(keyword).to_lower())
   } else {
-    haystack.contains(keyword)
+    collapse_whitespace(haystack).contains(collapse_whitespace(keyword))
   }
 }
 

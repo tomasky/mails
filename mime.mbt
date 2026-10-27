@@ -311,8 +311,39 @@ fn decode_transfer(body : Bytes, encoding : String) -> Bytes {
 }
 
 ///|
+/// Block-level tags whose boundaries end a line in the plain text rendering of
+/// an HTML message. The source layout of an HTML mail carries no meaning, so the
+/// tags are what tell the reader where one paragraph stops and the next starts.
+fn html_line_break_tag(tag : String) -> Bool {
+  let names = [
+    "br", "hr", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "pre",
+    "blockquote", "section", "article", "table", "ul", "ol",
+  ]
+  for name in names {
+    if tag.has_prefix("<" + name) || tag.has_prefix("</" + name) {
+      return true
+    }
+  }
+  false
+}
+
+///|
 fn strip_html(html : String) -> String {
-  let out = StringBuilder()
+  // Characters are collected into an array instead of written straight into a
+  // StringBuilder so that HTML whitespace can be squeezed the way a browser
+  // does: runs of spaces and tabs become one space, spaces next to a line break
+  // disappear, and the block tags below supply the line breaks rather than the
+  // source layout.
+  let out : Array[Char] = []
+  let push_space = () => {
+    if out.length() > 0 {
+      let last = out[out.length() - 1]
+      if last != ' ' && last != '\n' {
+        out.push(' ')
+      }
+    }
+  }
+  let push_break = () => if out.length() > 0 { out.push('\n') }
   let mut index = 0
   let chars = html.to_array()
   let mut in_tag = false
@@ -322,7 +353,7 @@ fn strip_html(html : String) -> String {
     if c == '<' {
       let rest : Array[Char] = []
       let mut peek = index
-      while peek < chars.length() && rest.length() < 8 {
+      while peek < chars.length() && rest.length() < 16 {
         rest.push(chars[peek])
         peek = peek + 1
       }
@@ -340,9 +371,10 @@ fn strip_html(html : String) -> String {
         index = index + 1
         continue
       }
-      if c == '<' {
-        in_tag = true
+      if html_line_break_tag(tag) {
+        push_break()
       }
+      in_tag = true
       index = index + 1
       continue
     }
@@ -365,23 +397,23 @@ fn strip_html(html : String) -> String {
         }
         let entity = String::from_array(tail[:])
         if entity.has_prefix("&amp;") {
-          out.write_char('&')
+          out.push('&')
           index = index + 5
           continue
         } else if entity.has_prefix("&lt;") {
-          out.write_char('<')
+          out.push('<')
           index = index + 4
           continue
         } else if entity.has_prefix("&gt;") {
-          out.write_char('>')
+          out.push('>')
           index = index + 4
           continue
         } else if entity.has_prefix("&quot;") {
-          out.write_char('"')
+          out.push('"')
           index = index + 6
           continue
         } else if entity.has_prefix("&nbsp;") {
-          out.write_char(' ')
+          push_space()
           index = index + 6
           continue
         } else if entity.has_prefix("&#") {
@@ -391,7 +423,7 @@ fn strip_html(html : String) -> String {
                 _ => -1
               }
               if code > 0 {
-                out.write_char(code.unsafe_to_char())
+                out.push(code.unsafe_to_char())
                 index = index + semi + 1
                 continue
               }
@@ -400,11 +432,15 @@ fn strip_html(html : String) -> String {
           }
         }
       }
-      out.write_char(c)
+      if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+        push_space()
+      } else {
+        out.push(c)
+      }
     }
     index = index + 1
   }
-  out.to_string()
+  String::from_array(out[:])
 }
 
 ///|
@@ -496,22 +532,88 @@ pub fn split_header_body(raw : Bytes) -> (Array[(String, String)], Bytes) {
 }
 
 ///|
+/// Normalize CRLF and lone CR line endings to LF.
+fn normalize_newlines(text : String) -> String {
+  let out = StringBuilder()
+  let chars = text.to_array()
+  let mut index = 0
+  while index < chars.length() {
+    let c = chars[index]
+    if c == '\r' {
+      out.write_char('\n')
+      if index + 1 < chars.length() && chars[index + 1] == '\n' {
+        index = index + 1
+      }
+    } else {
+      out.write_char(c)
+    }
+    index = index + 1
+  }
+  out.to_string()
+}
+
+///|
+/// Drop the spaces and tabs at the end of one line.
+fn trim_line_end(line : StringView) -> String {
+  let chars = line.to_owned().to_array()
+  let mut end = chars.length()
+  while end > 0 && (chars[end - 1] == ' ' || chars[end - 1] == '\t') {
+    end = end - 1
+  }
+  String::from_array(chars[:end])
+}
+
+///|
+/// Rebuild decoded text from its lines: line endings normalized, trailing spaces
+/// dropped, blank lines at the start and the end removed. The line breaks and the
+/// indentation inside the text are the sender's, so they survive.
+///
+/// `squeeze` also caps runs of blank lines at one, for text stripped out of
+/// HTML, where the layout of the source says nothing about the visible result.
+fn join_text_lines(text : String, squeeze : Bool) -> String {
+  let out = StringBuilder()
+  let mut breaks = 0
+  let mut wrote = false
+  for raw in normalize_newlines(text).split("\n") {
+    let line = trim_line_end(raw)
+    if is_blank(line) {
+      if wrote && (!squeeze || breaks < 2) {
+        breaks = breaks + 1
+      }
+      continue
+    }
+    let mut index = 0
+    while index < breaks {
+      out.write_char('\n')
+      index = index + 1
+    }
+    out.write_string(line)
+    breaks = 1
+    wrote = true
+  }
+  out.to_string()
+}
+
+///|
 /// Extract readable text from a body plus its already-parsed headers.
 ///
 /// IMAP returns the top-level headers (`HEADER`) and the body (`TEXT`)
 /// separately, and `TEXT` does not repeat the top-level `Content-Type`, so the
 /// caller has to pass the header list in for multipart mail to be recognised.
+///
+/// The body keeps its line breaks, because rules post it to chat services where
+/// a single line is hard to read.
 pub fn message_body_text_with_headers(
   headers : Array[(String, String)],
   raw_body : Bytes,
 ) -> String {
   let text : MimeText = { plain: "", html: "", }
   walk_mime(headers, raw_body, 0, text)
-  let plain = collapse_whitespace(text.plain)
+  let plain = join_text_lines(text.plain, false)
   if !is_blank(plain) {
     plain
   } else {
-    collapse_whitespace(text.html)
+    join_text_lines(text.html, true)
   }
 }
 

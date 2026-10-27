@@ -1,7 +1,7 @@
 ///| The `mails` command-line interface.
 
 ///|
-let cli_version : String = "0.1.5"
+let cli_version : String = "0.1.6"
 
 ///|
 priv struct CliOptions {

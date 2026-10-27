@@ -50,6 +50,27 @@ test "prefers the plain part of multipart/alternative" {
 }
 
 ///|
+test "plain text keeps its line breaks" {
+  let raw = "Content-Type: text/plain; charset=utf-8\r\n\r\n" +
+    "line one\r\n  indented\r\n\r\nline four\r\n"
+  assert_eq(
+    message_body_text(string_to_bytes(raw)),
+    "line one\n  indented\n\nline four",
+  )
+}
+
+///|
+test "html block tags become line breaks" {
+  let raw = "Content-Type: text/html; charset=utf-8\r\n\r\n" +
+    "<html><body>\n  <p>Invoice <b>#42</b><br>due tomorrow</p>\n" +
+    "  <p>Total: 100</p>\n</body></html>"
+  assert_eq(
+    message_body_text(string_to_bytes(raw)),
+    "Invoice #42\ndue tomorrow\n\nTotal: 100",
+  )
+}
+
+///|
 test "falls back to stripped html when there is no plain part" {
   let raw = "Content-Type: text/html; charset=utf-8\r\n\r\n" +
     "<html><style>p{color:red}</style><body><p>Hello &amp; welcome</p></body></html>"

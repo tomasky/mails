@@ -92,7 +92,7 @@ already develop with MoonBit.
 curl -LsSf https://raw.githubusercontent.com/tomasky/mails/master/install.sh | bash
 ```
 
-No Node.js or MoonBit required. The script accepts `--version 0.1.5`,
+No Node.js or MoonBit required. The script accepts `--version 0.1.6`,
 `--install-dir DIR` and `--no-verify`, and verifies the published SHA-256
 before installing. By default it installs into `~/.local/bin`.
 
@@ -137,7 +137,7 @@ See [Building](#building) for the static Linux build and tests.
 
 ## Releases
 
-Releases are tagged `v<version>` (for example `v0.1.5`). Each release publishes
+Releases are tagged `v<version>` (for example `v0.1.6`). Each release publishes
 one binary per target plus its `.sha256` checksum; there are no archives,
 because the installer, the npm launcher and `curl` all want the bare binary.
 Source archives are provided by GitHub for every tag.
@@ -445,7 +445,7 @@ Inside `command` and every `exec` argument:
 | --- | --- |
 | `{{account}}`, `{{mailbox}}`, `{{uid}}` | Where the message lives |
 | `{{subject}}`, `{{from}}`, `{{to}}`, `{{date}}`, `{{message_id}}` | Decoded headers |
-| `{{body}}` | Readable text body, truncated to `body_chars` |
+| `{{body}}` | Readable text body with its line breaks, truncated to `body_chars` |
 | `{{rule}}`, `{{keywords}}`, `{{fields}}` | Which rule fired and why |
 | `{{*_q}}` | The same value single-quoted for a POSIX shell |
 
@@ -462,6 +462,18 @@ The full environment for a rule command:
 `MAILS_ACCOUNT`, `MAILS_MAILBOX`, `MAILS_UID`, `MAILS_SUBJECT`, `MAILS_FROM`,
 `MAILS_TO`, `MAILS_DATE`, `MAILS_MESSAGE_ID`, `MAILS_RULE`,
 `MAILS_KEYWORDS`, `MAILS_BODY` (truncated), `MAILS_BODY_FULL`.
+
+The body keeps the line breaks of the original message, so a posted notification
+reads like the mail. Two things to keep in mind when you post it: JSON strings
+need `\n` rather than a real line break, and Markdown renderers (DingTalk, Slack,
+Telegram) show a break on a blank line only. This `command` does both:
+
+```sh
+body=$(printf '%s\n' "$MAILS_BODY" | awk 'NF { printf "%s\\n\\n", $0 }')
+curl -s -H 'Content-Type: application/json' \
+  -d "{\"msgtype\":\"markdown\",\"markdown\":{\"title\":\"$MAILS_SUBJECT\",\"text\":\"$body\"}}" \
+  "$DINGTALK_WEBHOOK"
+```
 
 ## Credentials
 
