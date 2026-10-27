@@ -375,6 +375,7 @@ revoked token.
 
 | Symptom | Cause and fix |
 | --- | --- |
+| `AADSTS50020` user account does not exist in tenant | the client id belongs to an app registered in another tenant (a Microsoft first-party id such as the portal's `74658136-…` cannot be used); copy the id from your own registration and register the app in the tenant that owns the mailbox |
 | `AADSTS700016` application not found in tenant | `oauth_tenant` does not match the app's supported account types; use `consumers`, `organizations`, `common` or the tenant id |
 | `AADSTS7000218` client authentication failed | **Allow public client flows** is still `No` |
 | `AADSTS65001` consent required | add the `IMAP.AccessAsUser.All` permission, or have a tenant admin grant consent |
