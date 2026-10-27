@@ -227,7 +227,7 @@ iCloud, Fastmail, Yahoo, and most others with 2FA).
 | Provider | `host` | `port` | `tls` | Notes |
 | --- | --- | --- | --- | --- |
 | Gmail / Google Workspace | `imap.gmail.com` | 993 | `true` | Needs an App Password with 2FA; "less secure apps" is gone |
-| Outlook / Microsoft 365 | `outlook.office365.com` | 993 | `true` | OAuth2-only for many tenants; basic auth is being retired |
+| Outlook / Microsoft 365 | `outlook.office365.com` | 993 | `true` | **OAuth2 only** — basic auth is permanently disabled, see below |
 | Yahoo Mail | `imap.mail.yahoo.com` | 993 | `true` | App Password required |
 | iCloud Mail | `imap.mail.me.com` | 993 | `true` | Apple ID app-specific password |
 | Fastmail | `imap.fastmail.com` | 993 | `true` | App password recommended |
@@ -237,9 +237,44 @@ iCloud, Fastmail, Yahoo, and most others with 2FA).
 | AOL Mail | `imap.aol.com` | 993 | `true` | |
 | Dovecot / self-hosted | your server | 993 | `true` | `tls_verify = false` only for self-signed certs |
 
-Outlook/Microsoft 365 and Gmail increasingly require OAuth2, which `mails`
-does not implement; if basic auth (an app password) is disabled for your
-tenant, `mails` cannot log in.
+### Providers that require OAuth2
+
+Microsoft disabled basic authentication for IMAP, POP and SMTP in Exchange
+Online in October 2022, and for Outlook.com/Hotmail consumer accounts on
+16 September 2024. It cannot be switched back on: not by a tenant admin, not
+by support, and an app password does not help either. Turning IMAP on in the
+account settings is therefore not enough — the login itself is refused before
+any mailbox is reached:
+
+```text
+server rejected 'LOGIN "you@outlook.com" <redacted>': NO  Basic authentication is disabled.
+```
+
+`mails` speaks IMAP `LOGIN` (RFC 3501, username + password) only. It does not
+implement OAuth2/XOAUTH2, so **no configuration can make an Outlook or
+Microsoft 365 account work directly**. Options:
+
+- **Use a provider that still accepts a password or an app password**: Gmail
+  (with 2FA + App Password), iCloud, Fastmail, Yahoo, Zoho, GMX, AOL, or a
+  self-hosted server.
+- **Put an OAuth bridge in front of it.** A local gateway such as
+  [DavMail](https://davmail.sourceforge.net/) signs in with OAuth2 and exposes
+  a plain IMAP port on localhost; point `mails` at that port with a dummy
+  password:
+
+  ```toml
+  [accounts.outlook]
+  host = "127.0.0.1"
+  port = 1143
+  username = "you@outlook.com"
+  password = "unused-bridge-placeholder"   # the bridge holds the OAuth token
+  mailboxes = ["INBOX"]
+  tls = false              # loopback only; do not expose this port
+  ```
+
+- **Add XOAUTH2 support to `mails`** if you need it natively; that means an
+  Azure app registration, a refresh token and the `AUTHENTICATE XOAUTH2`
+  exchange.
 
 ```toml
 [accounts.gmail]
@@ -509,8 +544,9 @@ directly instead of resolving them at runtime.
 ## Limitations
 
 - **IMAP only.** JMAP and POP3 are not implemented. Authentication is
-  `LOGIN` (with TLS); OAuth2/XOAUTH2 is not supported, so use an app password
-  for providers that require one.
+  `LOGIN` (with TLS) only. OAuth2/XOAUTH2 is not supported, so Microsoft 365
+  and Outlook.com cannot be used directly; see
+  [Providers that require OAuth2](#providers-that-require-oauth2).
 - **No persistent cursor.** The last seen UID lives in memory. After a restart
   with `startup_sync = false`, mail that arrived while `mails` was down is
   skipped; run `mails sync` (or set `startup_sync = true`) if you need it.

@@ -46,7 +46,7 @@ exec = ["/usr/local/bin/on-boss-mail", "--subject", "{{subject_q}}"]
 
 # IMAP hosts for common providers (all use SSL on port 993):
 #   Gmail / Workspace   imap.gmail.com          (App Password required)
-#   Outlook / M365      outlook.office365.com   (often OAuth2-only)
+#   Outlook / M365      outlook.office365.com   (OAuth2 ONLY, basic auth disabled)
 #   Yahoo               imap.mail.yahoo.com      (App Password required)
 #   iCloud              imap.mail.me.com         (app-specific password)
 #   Fastmail            imap.fastmail.com
