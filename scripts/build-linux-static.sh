@@ -92,11 +92,15 @@ build_openssl() {
     make clean >/dev/null 2>&1 || true
     # no-zlib/no-zstd keeps libcrypto.a free of external compression deps;
     # no-shared/no-dso remove the dynamic-loading code paths entirely.
+    # --openssldir must be a path that exists on the *user's* machine: it is
+    # baked into libcrypto as OPENSSLDIR and drives the default CA lookup
+    # (/etc/ssl/certs, /etc/ssl/cert.pem). The build workdir would leave the
+    # trust store empty and every handshake would fail verification.
     CC=musl-gcc \
       CFLAGS="-idirafter /usr/include -idirafter $multiarch" \
       ./Configure "$openssl_target" -static \
         --prefix="$openssl_prefix" \
-        --openssldir="$openssl_prefix/ssl" \
+        --openssldir=/etc/ssl \
         no-shared no-dso no-tests no-zlib no-zstd no-asm no-async
     # build_libs only builds libcrypto.a/libssl.a. `build_sw` would also
     # compile the whole `openssl` command-line suite, which adds minutes to

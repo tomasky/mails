@@ -24,6 +24,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <moonbit.h>
 
 // TODO: are these stable?
@@ -83,6 +84,7 @@ typedef struct X509_STORE X509_STORE;
   IMPORT_FUNC(long, SSL_CTX_ctrl, (SSL_CTX *ctx, int cmd, long larg, void *parg))\
   IMPORT_FUNC(void, SSL_CTX_set_verify, (SSL_CTX *ctx, int mode, int (*verify_cb)(int, void*)))\
   IMPORT_FUNC(int, SSL_CTX_set_default_verify_paths, (SSL_CTX *ctx))\
+  IMPORT_FUNC(int, SSL_CTX_load_verify_locations, (SSL_CTX *ctx, const char *CAfile, const char *CApath))\
   IMPORT_FUNC(unsigned long, ERR_get_error, (void))\
   IMPORT_FUNC(unsigned long, ERR_peek_error, (void))\
   IMPORT_FUNC(char *, ERR_error_string, (unsigned long e, char *buf))\
@@ -171,14 +173,74 @@ int moonbitlang_async_tls_ssl_ctx_is_null(SSL_CTX *ctx) {
   return ctx == 0;
 }
 
+// Load a CA bundle from the usual locations.
+//
+// A statically linked OpenSSL has its default trust paths baked in at build
+// time (OPENSSLDIR), which for a portable binary is meaningless: the build
+// machine's directory does not exist on the user's machine. Worse,
+// SSL_CTX_set_default_verify_paths() reports success (1) even when it loads
+// nothing, so it cannot be used to detect the problem -- the store silently
+// stays empty and every handshake then fails with
+// "certificate verify failed".
+//
+// SSL_CERT_FILE / SSL_CERT_DIR win if set; otherwise try the CA bundle paths
+// used by the common distributions. Returns 1 if at least one location
+// loaded, 0 if none did.
+static int mails_tls_load_ca_locations(SSL_CTX *ctx) {
+  const char *env_file = getenv("SSL_CERT_FILE");
+  const char *env_dir = getenv("SSL_CERT_DIR");
+  if ((env_file && *env_file) || (env_dir && *env_dir)) {
+    if (SSL_CTX_load_verify_locations(
+          ctx,
+          (env_file && *env_file) ? env_file : 0,
+          (env_dir && *env_dir) ? env_dir : 0
+        ) == 1) {
+      return 1;
+    }
+  }
+
+  static const char *const ca_files[] = {
+    "/etc/ssl/certs/ca-certificates.crt",          // Debian, Ubuntu, Arch, Gentoo
+    "/etc/ssl/cert.pem",                           // Alpine, macOS, Debian 12+
+    "/etc/pki/tls/certs/ca-bundle.crt",            // Fedora, RHEL <= 6
+    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // RHEL 7+, CentOS
+    "/etc/ssl/ca-bundle.pem",                      // openSUSE
+    "/etc/pki/tls/cacert.pem",                     // older RHEL
+    "/usr/local/share/certs/ca-root-nss.crt",      // FreeBSD
+    0,
+  };
+  for (int i = 0; ca_files[i]; i++) {
+    if (SSL_CTX_load_verify_locations(ctx, ca_files[i], 0) == 1) {
+      return 1;
+    }
+  }
+
+  static const char *const ca_dirs[] = {
+    "/etc/ssl/certs",   // hashed symlink directory
+    "/etc/pki/tls/certs",
+    0,
+  };
+  for (int i = 0; ca_dirs[i]; i++) {
+    if (SSL_CTX_load_verify_locations(ctx, 0, ca_dirs[i]) == 1) {
+      return 1;
+    }
+  }
+  return 0;
+}
+
 SSL_CTX *moonbitlang_async_tls_client_ctx(int32_t load_default_verify_path) {
   SSL_CTX *client_ctx = SSL_CTX_new(TLS_client_method());
   if (!client_ctx) return 0;
 
   SSL_CTX_set_verify(client_ctx, SSL_VERIFY_PEER, 0);
-  if (load_default_verify_path && !SSL_CTX_set_default_verify_paths(client_ctx)) {
-    SSL_CTX_free(client_ctx);
-    return 0;
+  if (load_default_verify_path) {
+    int have_defaults = SSL_CTX_set_default_verify_paths(client_ctx);
+    if (!mails_tls_load_ca_locations(client_ctx) && !have_defaults) {
+      // No trust anchors at all: fail loudly here so the caller reports a
+      // context error instead of a confusing per-connection verify failure.
+      SSL_CTX_free(client_ctx);
+      return 0;
+    }
   }
 
   SSL_CTX_ctrl(client_ctx, SSL_CTRL_MODE, SSL_MODE_ENABLE_PARTIAL_WRITE, 0);
