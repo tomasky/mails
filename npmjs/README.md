@@ -117,8 +117,8 @@ release — it falls back to the latest release, says so, and **keeps the binary
 under its own version**:
 
 ```
-mails: warning: v0.2.0 has not been released; using v0.1.7, which is the latest release
-mails: installed ~/.cache/mails/mails-0.1.7-linux-x86_64 (v0.1.7)
+mails: warning: v0.2.0 has not been released; using v0.1.8, which is the latest release
+mails: installed ~/.cache/mails/mails-0.1.8-linux-x86_64 (v0.1.8)
 ```
 
 `mails version` therefore always reports what is actually running, and once

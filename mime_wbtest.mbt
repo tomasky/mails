@@ -226,3 +226,58 @@ test "does not break lines on tags that merely start with a break tag name" {
   let text = message_body_text(string_to_bytes(raw))
   assert_eq(text, "alphaopt")
 }
+
+///|
+/// Quoted-printable bodies from Chinese providers use hard CRLF line breaks,
+/// which the decoder used to drop, flattening the whole message to one line.
+test "quoted-printable keeps hard line breaks" {
+  let raw = "Content-Type: text/plain; charset=utf-8\r\n" +
+    "Content-Transfer-Encoding: quoted-printable\r\n\r\n" +
+    "=E6=98=A8=E5=A4=A9=E5=AE=8C=E6=88=90=E7=9A=84=E5=B7=A5=E4=BD=9C=EF=BC=9A\r\n\r\n1. =E4=B8=BA Arrow Unbound =E5=87=86=E5=A4=87=E7=B4=A0=E6=9D=90=E3=80=82\r\n\r\n2. =E5=B7=B4=E8=A5=BF=EF=BC=9AOffer 616844=E3=80=82\r\n"
+  assert_eq(
+    message_body_text(string_to_bytes(raw)),
+    "昨天完成的工作：\n\n1. 为 Arrow Unbound 准备素材。\n\n2. 巴西：Offer 616844。",
+  )
+}
+
+///|
+/// A soft break only means "this line was too long for the encoder", so it has
+/// to disappear without leaving a break behind.
+test "quoted-printable drops soft line breaks" {
+  let raw = "Content-Type: text/plain; charset=utf-8\r\n" +
+    "Content-Transfer-Encoding: quoted-printable\r\n\r\n" +
+    "=E4=BD=A0=\r\n=E5=A5=BD=EF=BC=8C=\r\n=E4=B8=96=E7=95=8C"
+  assert_eq(message_body_text(string_to_bytes(raw)), "你好，世界")
+}
+
+///|
+test "quoted-printable keeps a stray equals sign" {
+  let raw = "Content-Type: text/plain; charset=utf-8\r\n" +
+    "Content-Transfer-Encoding: quoted-printable\r\n\r\n" +
+    "a = b =zz"
+  assert_eq(message_body_text(string_to_bytes(raw)), "a = b =zz")
+}
+
+///|
+/// The same code path carries HTML parts, which are quoted-printable just as
+/// often; the paragraphs still have to survive.
+test "quoted-printable html keeps its paragraphs" {
+  let raw = "Content-Type: text/html; charset=utf-8\r\n" +
+    "Content-Transfer-Encoding: quoted-printable\r\n\r\n" +
+    "<div>=E7=AC=AC=E4=B8=80=E6=AE=B5</div>\r\n" +
+    "<div>=E7=AC=AC=E4=BA=8C=E6=AE=B5</div>"
+  assert_eq(message_body_text(string_to_bytes(raw)), "第一段\n\n第二段")
+}
+
+///|
+/// A multipart message with one quoted-printable part per language: the rule
+/// keyword has to be found and the line structure kept.
+test "multipart quoted-printable keeps every part's line breaks" {
+  let raw = "Content-Type: multipart/mixed; boundary=BND\r\n\r\n" +
+    "--BND\r\n" +
+    "Content-Type: text/plain; charset=utf-8\r\n" +
+    "Content-Transfer-Encoding: quoted-printable\r\n\r\n" +
+    "line one\r\nline two\r\n" +
+    "--BND--\r\n"
+  assert_eq(message_body_text(string_to_bytes(raw)), "line one\nline two")
+}

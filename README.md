@@ -92,7 +92,7 @@ already develop with MoonBit.
 curl -LsSf https://raw.githubusercontent.com/tomasky/mails/master/install.sh | bash
 ```
 
-No Node.js or MoonBit required. The script accepts `--version 0.1.7`,
+No Node.js or MoonBit required. The script accepts `--version 0.1.8`,
 `--install-dir DIR` and `--no-verify`, and verifies the published SHA-256
 before installing. By default it installs into `~/.local/bin`.
 
@@ -137,7 +137,7 @@ See [Building](#building) for the static Linux build and tests.
 
 ## Releases
 
-Releases are tagged `v<version>` (for example `v0.1.7`). Each release publishes
+Releases are tagged `v<version>` (for example `v0.1.8`). Each release publishes
 one binary per target plus its `.sha256` checksum; there are no archives,
 because the installer, the npm launcher and `curl` all want the bare binary.
 Source archives are provided by GitHub for every tag.

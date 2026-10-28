@@ -270,26 +270,51 @@ fn bytes_split(data : Bytes, separator : Bytes) -> Array[Bytes] {
 /// decoder ever saw it.
 fn decode_quoted_printable_data(data : Bytes) -> Bytes {
   let out : Array[Byte] = []
+  let length = data.length()
   let mut index = 0
-  while index < data.length() {
+  while index < length {
     let value = data[index].to_int()
     if value == 0x3D {
-      if index + 2 < data.length() {
-        match
-          (
-            hex_nibble(data[index + 1].to_int().unsafe_to_char()),
-            hex_nibble(data[index + 2].to_int().unsafe_to_char()),
-          ) {
+      // `=` starts either a soft line break or an `=XX` escape.
+      let mut handled = false
+      if index + 1 < length && data[index + 1].to_int() == 0x0A {
+        // Soft break: the encoder wrapped a long line. Both the `=` and the
+        // break belong to the encoding, not to the text.
+        index = index + 2
+        handled = true
+      } else if index + 2 < length &&
+        data[index + 1].to_int() == 0x0D &&
+        data[index + 2].to_int() == 0x0A {
+        index = index + 3
+        handled = true
+      }
+      if !handled && index + 2 < length {
+        let high = hex_nibble(data[index + 1].to_int().unsafe_to_char())
+        let low = hex_nibble(data[index + 2].to_int().unsafe_to_char())
+        match (high, low) {
           (Some(high), Some(low)) => {
             out.push(((high * 16 + low) & 0xFF).to_byte())
             index = index + 3
-            continue
+            handled = true
           }
           _ => ()
         }
       }
-      index = index + 1
-    } else if value == 0x0D || value == 0x0A {
+      if !handled {
+        // Not a valid escape: keep the character instead of eating it.
+        out.push(data[index])
+        index = index + 1
+      }
+    } else if value == 0x0D {
+      // A hard line break is content: keep it, normalised to `\n`.
+      out.push(b'\n')
+      if index + 1 < length && data[index + 1].to_int() == 0x0A {
+        index = index + 2
+      } else {
+        index = index + 1
+      }
+    } else if value == 0x0A {
+      out.push(b'\n')
       index = index + 1
     } else {
       out.push(data[index])
