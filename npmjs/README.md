@@ -90,9 +90,10 @@ These affect the launcher:
 | --- | --- |
 | `MAILS_BINARY` | Run this binary and never download anything |
 | `MAILS_CACHE_DIR` | Where to keep the downloaded binary |
-| `MAILS_VERSION` | Release version to fetch (default: this package's version) |
+| `MAILS_VERSION` | Release version to fetch (default: this package's version); setting it also disables the fallback below |
 | `MAILS_REPO` | `owner/repo` to download from (default: `tomasky/mails`) |
-| `MAILS_DOWNLOAD_BASE` | Full base URL, overriding `MAILS_REPO`/`MAILS_VERSION` |
+| `MAILS_RELEASES_BASE` | Host serving the releases, e.g. a GitHub Enterprise or a mirror (default: `https://github.com/<repo>`) |
+| `MAILS_DOWNLOAD_BASE` | Full base URL for the binary, overriding `MAILS_REPO`/`MAILS_VERSION` |
 | `MAILS_FORCE_DOWNLOAD` | Re-download even if the cached binary exists |
 | `MAILS_SKIP_DOWNLOAD` | Never download; fail if the binary is absent |
 | `MAILS_NO_VERIFY` | Skip SHA-256 verification of the download |
@@ -108,8 +109,24 @@ Rule commands additionally receive `MAILS_ACCOUNT`, `MAILS_SUBJECT`,
 `MAILS_FROM`, `MAILS_BODY` and friends. See the
 [main README](https://github.com/tomasky/mails#environment-variables).
 
-`MAILS_DOWNLOAD_BASE` and `MAILS_REPO` are there for forks, private mirrors and
-air-gapped installs:
+### When the pinned release does not exist yet
+
+The launcher first asks for `v<package version>`. If that tag has not been
+published — the usual case when the npm package is bumped before the GitHub
+release — it falls back to the latest release, says so, and **keeps the binary
+under its own version**:
+
+```
+mails: warning: v0.2.0 has not been released; using v0.1.7, which is the latest release
+mails: installed ~/.cache/mails/mails-0.1.7-linux-x86_64 (v0.1.7)
+```
+
+`mails version` therefore always reports what is actually running, and once
+v0.2.0 is released the launcher picks it up instead of reusing the older
+binary. Set `MAILS_VERSION` to pin a version and turn the fallback off.
+
+`MAILS_DOWNLOAD_BASE`, `MAILS_RELEASES_BASE` and `MAILS_REPO` are there for
+forks, private mirrors and air-gapped installs:
 
 ```sh
 export MAILS_DOWNLOAD_BASE=https://internal.example.com/mails

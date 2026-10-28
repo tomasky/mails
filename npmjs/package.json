@@ -1,6 +1,6 @@
 {
   "name": "@tomasko/mails",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Watch IMAP mailboxes with IDLE and run shell commands when a message matches subject or body keywords. A single static binary with encrypted credential storage.",
   "license": "Apache-2.0",
   "bin": {

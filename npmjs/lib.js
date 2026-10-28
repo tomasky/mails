@@ -11,7 +11,10 @@
 //
 // Overrides (all optional):
 //   MAILS_REPO            owner/repo       (default: tomasky/mails)
-//   MAILS_VERSION         release version  (default: this package's version)
+//   MAILS_VERSION         release version  (default: this package's version);
+//                         setting it pins that version and disables the
+//                         fallback to the latest release
+//   MAILS_RELEASES_BASE   host serving the releases (default: GitHub)
 //   MAILS_DOWNLOAD_BASE   full base URL    (overrides MAILS_REPO/MAILS_VERSION)
 //   MAILS_CACHE_DIR       where the binary is kept
 //   MAILS_BINARY          run this binary and never download
@@ -60,20 +63,87 @@ function assetName(target) {
   return `mails-${target}`;
 }
 
-// Both URLs are tried in order: the pinned version first, then whatever is
-// latest. The fallback keeps the launcher useful when a release was re-cut
-// under a different tag, or when package.json was bumped ahead of the tag.
-function downloadUrls(target) {
+// Everything below is resolved against this prefix, so a mirror or a GitHub
+// Enterprise host can serve the releases too.
+function releaseBase() {
+  return (
+    process.env.MAILS_RELEASES_BASE || `https://github.com/${repoSlug()}`
+  ).replace(/\/+$/, "");
+}
+
+function pinnedUrl(target) {
+  return `${releaseBase()}/releases/download/v${version()}/${assetName(target)}`;
+}
+
+function latestUrl(target) {
+  return `${releaseBase()}/releases/latest/download/${assetName(target)}`;
+}
+
+// The pinned version first, then whatever is latest. The fallback keeps the
+// launcher useful when package.json was bumped ahead of the tag, but it is
+// marked as such: the binary is cached under *its own* version, never the
+// pinned one, so `mails version` keeps telling the truth. An explicit
+// MAILS_VERSION pins the version and disables the fallback entirely.
+//
+// `version: null` means "resolve the tag first, the version is not known yet".
+function downloadAttempts(target) {
   const asset = assetName(target);
   if (process.env.MAILS_DOWNLOAD_BASE) {
     const base = process.env.MAILS_DOWNLOAD_BASE.replace(/\/+$/, "");
-    return [`${base}/${asset}`];
+    return [{ url: `${base}/${asset}`, version: version(), fallback: false }];
   }
-  const repo = repoSlug();
-  return [
-    `https://github.com/${repo}/releases/download/v${version()}/${asset}`,
-    `https://github.com/${repo}/releases/latest/download/${asset}`,
+  const attempts = [
+    { url: pinnedUrl(target), version: version(), fallback: false },
   ];
+  if (!process.env.MAILS_VERSION) {
+    attempts.push({ url: latestUrl(target), version: null, fallback: true });
+  }
+  return attempts;
+}
+
+function downloadUrls(target) {
+  return downloadAttempts(target).map((attempt) => attempt.url);
+}
+
+// `https://github.com/o/r/releases/tag/v0.1.5` -> `v0.1.5`.
+function parseLatestTag(location) {
+  const m = String(location || "").match(/\/releases\/tag\/([^/?#]+)\/?$/);
+  return m ? m[1] : null;
+}
+
+// Which tag `releases/latest` currently points at. The redirect is read
+// without following it, so this costs one request and no download. Knowing the
+// tag is what lets the fallback binary keep its real version.
+function latestTag() {
+  return new Promise((resolve, reject) => {
+    const url = `${releaseBase()}/releases/latest`;
+    const client = url.startsWith("http:") ? http : https;
+    const req = client.request(
+      url,
+      {
+        method: "HEAD",
+        headers: { "user-agent": `mails-npm/${pkg.version}` },
+      },
+      (res) => {
+        res.resume();
+        const tag = parseLatestTag(res.headers.location);
+        if (tag) resolve(tag);
+        else {
+          reject(
+            new Error(
+              `cannot tell which version ${url} points at (HTTP ${res.statusCode}); ` +
+                `set MAILS_VERSION to choose one explicitly`
+            )
+          );
+        }
+      }
+    );
+    req.on("error", reject);
+    req.setTimeout(30000, () =>
+      req.destroy(new Error(`timed out asking ${url}`))
+    );
+    req.end();
+  });
 }
 
 function cacheDir() {
@@ -86,8 +156,53 @@ function cacheDir() {
   return path.join(base, "mails");
 }
 
-function binaryPath(target) {
-  return path.join(cacheDir(), `mails-${version()}-${target}`);
+// The version in the file name is the version of the binary inside it, which
+// is not always the version this package pins: see `downloadUrls`.
+function binaryPath(target, binaryVersion) {
+  return path.join(
+    cacheDir(),
+    `mails-${binaryVersion || version()}-${target}`
+  );
+}
+
+// Every runnable binary already in the cache for `target`, newest version
+// first. A fallback download is stored under its own version, so this is how
+// it is found again when the pinned release still does not exist.
+function cachedVersions(target) {
+  const suffix = `-${target}`;
+  let names;
+  try {
+    names = fs.readdirSync(cacheDir());
+  } catch {
+    return [];
+  }
+  const found = [];
+  for (const name of names) {
+    if (!name.startsWith("mails-") || !name.endsWith(suffix)) continue;
+    const version = name.slice("mails-".length, name.length - suffix.length);
+    const file = path.join(cacheDir(), name);
+    if (/^\d+\.\d+\.\d+/.test(version) && isRunnable(file)) {
+      found.push({ version, file });
+    }
+  }
+  found.sort((a, b) => compareVersions(b.version, a.version));
+  return found;
+}
+
+// `1.10.0` is newer than `1.9.0`, which a plain string compare gets wrong.
+function compareVersions(a, b) {
+  const parse = (v) =>
+    String(v)
+      .replace(/^v/, "")
+      .split(/[.+-]/)
+      .map((n) => parseInt(n, 10) || 0);
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+    const diff = (pa[i] || 0) - (pb[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
 }
 
 function isRunnable(file) {
@@ -198,6 +313,10 @@ async function verify(dest, url, log) {
 
 /**
  * Resolve to a runnable `mails` binary, downloading it when it is missing.
+ *
+ * When the pinned version has no release yet, the latest release is used, but
+ * it is kept under its own version: the cache file name, the path returned and
+ * the warning all name the version that actually runs.
  */
 async function ensureBinary({ force = false, log = () => {} } = {}) {
   if (process.env.MAILS_BINARY) {
@@ -218,36 +337,66 @@ async function ensureBinary({ force = false, log = () => {} } = {}) {
     );
   }
 
-  const dest = binaryPath(target);
   const wanted = force || process.env.MAILS_FORCE_DOWNLOAD;
+  const want = version();
+  const dest = binaryPath(target, want);
   if (!wanted && isRunnable(dest)) return dest;
 
   if (process.env.MAILS_SKIP_DOWNLOAD) {
     if (isRunnable(dest)) return dest;
+    // A fallback binary from an earlier run is stored under its own version.
+    const cached = cachedVersions(target);
+    if (cached.length > 0) {
+      log(
+        `mails: warning: v${want} is not in the cache; ` +
+          `using the cached v${cached[0].version}`
+      );
+      return cached[0].file;
+    }
     throw new Error(
-      `MAILS_SKIP_DOWNLOAD is set but no mails binary is installed at ${dest}`
+      `MAILS_SKIP_DOWNLOAD is set but no mails binary is installed in ${cacheDir()}`
     );
   }
 
-  const urls = downloadUrls(target);
-  let lastError;
-  for (const url of urls) {
+  const failures = [];
+  for (const attempt of downloadAttempts(target)) {
+    // A fallback attempt carries no version until the tag is resolved.
+    let binaryVersion = attempt.version;
+    if (attempt.fallback) {
+      try {
+        binaryVersion = String(await latestTag()).replace(/^v/, "");
+      } catch (err) {
+        failures.push(`${attempt.url}: ${err.message}`);
+        log(`mails: ${err.message}`);
+        continue;
+      }
+      if (binaryVersion !== want) {
+        log(
+          `mails: warning: v${want} has not been released; ` +
+            `using v${binaryVersion}, which is the latest release`
+        );
+      }
+    }
+    const dest = binaryPath(target, binaryVersion);
+    if (!wanted && isRunnable(dest)) {
+      log(`mails: using ${dest}`);
+      return dest;
+    }
     try {
-      log(`mails: downloading ${url}`);
-      await downloadTo(url, dest);
-      await verify(dest, url, log);
-      log(`mails: installed ${dest}`);
+      log(`mails: downloading ${attempt.url}`);
+      await downloadTo(attempt.url, dest);
+      await verify(dest, attempt.url, log);
+      log(`mails: installed ${dest} (v${binaryVersion})`);
       return dest;
     } catch (err) {
-      lastError = err;
+      failures.push(`${attempt.url}: ${err.message}`);
       log(`mails: ${err.message}`);
     }
   }
 
   throw new Error(
     `could not download the mails binary for ${target}.\n` +
-      `Tried:\n${urls.map((u) => `  ${u}`).join("\n")}\n` +
-      `Last error: ${lastError && lastError.message}\n\n` +
+      `Tried:\n${failures.map((f) => `  ${f}`).join("\n")}\n\n` +
       `Install it another way instead:\n` +
       `  curl -LsSf https://raw.githubusercontent.com/${repoSlug()}/master/install.sh | bash\n` +
       `or set MAILS_DOWNLOAD_BASE to a mirror.`
@@ -263,6 +412,14 @@ module.exports = {
   version,
   assetName,
   downloadUrls,
+  downloadAttempts,
+  releaseBase,
+  cachedVersions,
+  compareVersions,
+  latestTag,
+  parseLatestTag,
+  pinnedUrl,
+  latestUrl,
   cacheDir,
   binaryPath,
   isRunnable,
