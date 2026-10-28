@@ -1,7 +1,7 @@
 ///| The `mails` command-line interface.
 
 ///|
-let cli_version : String = "0.1.6"
+let cli_version : String = "0.1.7"
 
 ///|
 priv struct CliOptions {
@@ -482,6 +482,9 @@ async fn cmd_check(opts : CliOptions) -> Unit {
   let accounts = selected_accounts(config, opts.account) catch {
     err => raise cli_error(error_message(err))
   }
+  warn_injection_risks(config, accounts) catch {
+    _ => ()
+  }
   let mut failures = 0
   for account in accounts {
     let failure : Error? = (() => {
@@ -502,6 +505,46 @@ async fn cmd_check(opts : CliOptions) -> Unit {
     raise cli_error(failures.to_string() + " account(s) failed the check")
   }
   print_line("all accounts are reachable")
+}
+
+///|
+/// Warn about rule commands that interpolate message text straight into a
+/// shell: anyone who can send mail could then run a command.
+async fn warn_injection_risks(
+  config : Config,
+  accounts : Array[Account],
+) -> Unit {
+  let rules : Array[Rule] = []
+  for rule in config.rules {
+    rules.push(rule)
+  }
+  for account in accounts {
+    for rule in account.rules {
+      rules.push(rule)
+    }
+  }
+  for rule in rules {
+    if rule.shell_command == "" {
+      continue
+    }
+    let risky = raw_placeholders(rule.shell_command)
+    if risky.length() > 0 {
+      let advice : Array[String] = []
+      for name in risky {
+        advice.push(raw_placeholder_advice(name))
+      }
+      print_error(
+        "rule '" +
+        rule.name +
+        "': " +
+        risky.join(", ") +
+        " inserted raw into a shell command, so a sender can run a command " +
+        "through it; use " +
+        advice.join(" or ") +
+        " instead",
+      )
+    }
+  }
 }
 
 ///|
@@ -615,6 +658,12 @@ async fn dispatch(opts : CliOptions) -> Unit {
 ///|
 /// Parse arguments, run the command, and report whether it succeeded.
 pub async fn main_cli() -> Bool {
+  // Keep quiet about everything but errors, for cron and supervised runs whose
+  // log the supervisor already collects.
+  match @env.get_env_var("MAILS_QUIET") {
+    Some("1") | Some("true") | Some("yes") => set_log_level(Quiet)
+    _ => ()
+  }
   let argv = @env.args()
   let opts = parse_args(argv) catch {
     err => {

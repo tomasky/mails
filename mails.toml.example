@@ -31,9 +31,14 @@ fields = ["subject", "body"]
 match = "any"
 case_sensitive = false
 regex = false
-# Shell string, run with `sh -c`. Use {{subject_q}} or $MAILS_SUBJECT when the
-# subject reaches a shell.
-command = 'notify-send "Mail from {{from}}" "{{subject}}"'
+# Shell string, run with `sh -c`. {{subject}}, {{from}} and {{body}} are
+# inserted RAW, so a sender could inject a command through them. Use the *_q
+# variants, or the MAILS_* environment, which a shell never parses:
+#   command = 'logger -t mails "$MAILS_SUBJECT" "$MAILS_BODY"'
+#   command = 'printf "%s\n" {{body_q}} >> ~/mail.log'
+# `cat {{body}}` does not work: the body is not one word, so cat reads it as a
+# file name.
+command = 'notify-send "Mail from $MAILS_FROM" "$MAILS_SUBJECT"'
 timeout = "10s"
 # body_chars = 500
 # accounts = ["work"]

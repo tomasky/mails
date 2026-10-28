@@ -169,6 +169,8 @@ pub fn truncate_chars(text : String, max_chars : Int32) -> String {
 
 ///|
 pub enum LogLevel {
+  /// Nothing but errors; used by tests and `MAILS_QUIET`.
+  Quiet
   Warn
   Info
   Debug
@@ -189,13 +191,16 @@ pub fn log_error(msg : String) -> Unit {
 
 ///|
 pub fn log_warn(msg : String) -> Unit {
-  eprintln("mails: warning: " + msg)
+  match log_level.val {
+    Quiet => ()
+    _ => eprintln("mails: warning: " + msg)
+  }
 }
 
 ///|
 pub fn log_info(msg : String) -> Unit {
   match log_level.val {
-    Warn => ()
+    Warn | Quiet => ()
     _ => eprintln("mails: " + msg)
   }
 }
@@ -206,6 +211,26 @@ pub fn log_debug(msg : String) -> Unit {
     Debug => eprintln("mails: debug: " + msg)
     _ => ()
   }
+}
+
+///|
+/// Truncate `text` to at most `max_bytes` UTF-8 bytes without splitting a
+/// character.
+///
+/// Environment variables need this: Linux rejects a single value above 128 KiB
+/// with `execve: argument list too long`, so a large mail body would stop the
+/// rule command from running at all.
+pub fn truncate_bytes(text : String, max_bytes : Int32) -> String {
+  let raw = string_to_bytes(text)
+  if raw.length() <= max_bytes {
+    return text
+  }
+  let mut end = if max_bytes > 0 { max_bytes } else { 0 }
+  // Back off to the start of the last (possibly partial) UTF-8 sequence.
+  while end > 0 && (raw[end].to_int() & 0xC0) == 0x80 {
+    end = end - 1
+  }
+  bytes_to_string_lossy(raw[0:end].to_owned())
 }
 
 ///|

