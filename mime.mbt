@@ -300,6 +300,79 @@ fn decode_quoted_printable_data(data : Bytes) -> Bytes {
 }
 
 ///|
+/// Charset of a body part: the `charset` parameter when the headers carry one,
+/// otherwise the one an HTML `<meta>` tag declares.
+///
+/// Chinese providers routinely leave the charset out of the MIME headers and
+/// only declare it inside the HTML, which used to decode as UTF-8 mojibake.
+fn charset_of(declared : String?, bytes : Bytes, is_html : Bool) -> String {
+  match declared {
+    Some(value) => value
+    None =>
+      if is_html {
+        match sniff_html_charset(bytes) {
+          Some(value) => value
+          None => "utf-8"
+        }
+      } else {
+        "utf-8"
+      }
+  }
+}
+
+///|
+/// Read `charset=` out of the first few hundred bytes of an HTML document.
+fn sniff_html_charset(bytes : Bytes) -> String? {
+  let limit = if bytes.length() < 4096 { bytes.length() } else { 4096 }
+  let head = bytes_to_string_lossy(bytes[0:limit].to_owned()).to_lower()
+  // Only trust a declaration that mentions <meta>, so a stray "charset=" in
+  // the text of a plain-looking document is ignored.
+  if !head.contains("<meta") {
+    return None
+  }
+  let mut search = head
+  let mut attempts = 0
+  while attempts < 8 {
+    attempts = attempts + 1
+    match search.find("charset=") {
+      None => return None
+      Some(index) => {
+        let after = search[index + "charset=".length():].to_owned()
+        // The value is often quoted: `charset="gb2312"`.
+        let mut body = after
+        while body.length() > 0 && (body[0] == ' ' || body[0] == '\t') {
+          body = body[1:].to_owned()
+        }
+        if body.length() > 0 && (body[0] == '"' || body[0] == '\'') {
+          body = body[1:].to_owned()
+        }
+        let name = StringBuilder()
+        for c in body {
+          let stop = c == '"' ||
+            c == '\'' ||
+            c == ';' ||
+            c == ' ' ||
+            c == '\t' ||
+            c == '\r' ||
+            c == '\n' ||
+            c == '>'
+          if stop {
+            break
+          }
+          name.write_char(c)
+        }
+        let candidate = trim(name.to_string())
+        if candidate != "" && candidate.length() <= 40 {
+          return Some(candidate)
+        }
+        search = after
+      }
+    }
+  }
+  None
+}
+
+///|
 fn decode_transfer(body : Bytes, encoding : String) -> Bytes {
   match encoding.to_lower() {
     "base64" =>
@@ -319,12 +392,27 @@ fn html_line_break_tag(tag : String) -> Bool {
     "br", "hr", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "pre",
     "blockquote", "section", "article", "table", "ul", "ol",
   ]
-  for name in names {
-    if tag.has_prefix("<" + name) || tag.has_prefix("</" + name) {
-      return true
-    }
+  // Compare the whole tag name: `has_prefix("<p")` would also fire for
+  // `<param>`, `<picture>` or `<link>` and inject breaks where the message has
+  // none.
+  let mut start = 1
+  if tag.length() > 1 && tag[1] == '/' {
+    start = 2
   }
-  false
+  let mut end = start
+  while end < tag.length() {
+    let c = tag[end]
+    let is_name = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+    if !is_name {
+      break
+    }
+    end = end + 1
+  }
+  if end == start {
+    return false
+  }
+  let name = tag[start:end].to_owned()
+  names.contains(name)
 }
 
 ///|
@@ -497,16 +585,17 @@ fn walk_mime(
     return
   }
   let encoding = header_value(headers, "content-transfer-encoding")
-  let charset = match param_value(params, "charset") {
-    Some(value) => value
-    None => "utf-8"
-  }
+  let declared = param_value(params, "charset")
   if media_type == "text/plain" {
     let bytes = decode_transfer(body, encoding)
-    text.plain = text.plain + decode_charset(bytes, charset) + "\n"
+    text.plain = text.plain +
+      decode_charset(bytes, charset_of(declared, bytes, false)) +
+      "\n"
   } else if media_type == "text/html" {
     let bytes = decode_transfer(body, encoding)
-    text.html = text.html + strip_html(decode_charset(bytes, charset)) + "\n"
+    text.html = text.html +
+      strip_html(decode_charset(bytes, charset_of(declared, bytes, true))) +
+      "\n"
   }
 }
 

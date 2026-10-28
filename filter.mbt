@@ -35,16 +35,34 @@ fn field_text(message : MailMessage, field : MatchField) -> String {
 }
 
 ///|
+
+///|
+/// Text of one match field, prepared once per message instead of once per
+/// keyword: the body can be hundreds of kilobytes and a rule may list many
+/// keywords, so the whitespace-squeezed and lowercased copies are reused.
+priv struct PreparedField {
+  raw : String
+  squeezed : String
+  squeezed_lower : String
+}
+
+///|
+fn prepare_field(text : String) -> PreparedField {
+  let squeezed = collapse_whitespace(text)
+  { raw: text, squeezed, squeezed_lower: squeezed.to_lower(), }
+}
+
+///|
 fn keyword_matches(
   keyword : String,
-  haystack : String,
+  field : PreparedField,
   ignore_case : Bool,
   regex : Bool,
 ) -> Bool {
   if regex {
     let pattern = if ignore_case { "(?i:" + keyword + ")" } else { keyword }
     let compiled = @string.Regex::Regex(pattern) catch { _ => return false }
-    match compiled.execute(haystack) {
+    match compiled.execute(field.raw) {
       Some(_) => true
       None => false
     }
@@ -52,11 +70,9 @@ fn keyword_matches(
     // The body keeps the line breaks of the original message, so whitespace is
     // squeezed on both sides: a keyword written with a space still matches a
     // phrase the sender wrapped over two lines.
-    collapse_whitespace(haystack)
-    .to_lower()
-    .contains(collapse_whitespace(keyword).to_lower())
+    field.squeezed_lower.contains(collapse_whitespace(keyword).to_lower())
   } else {
-    collapse_whitespace(haystack).contains(collapse_whitespace(keyword))
+    field.squeezed.contains(collapse_whitespace(keyword))
   }
 }
 
@@ -66,9 +82,9 @@ pub fn match_rule(rule : Rule, message : MailMessage) -> RuleMatch? {
   let matched_keywords : Array[String] = []
   let matched_fields : Array[String] = []
   for field in rule.fields {
-    let text = field_text(message, field)
+    let prepared = prepare_field(field_text(message, field))
     for keyword in rule.keywords {
-      if keyword_matches(keyword, text, rule.ignore_case, rule.regex) {
+      if keyword_matches(keyword, prepared, rule.ignore_case, rule.regex) {
         let mut already = false
         for seen in matched_keywords {
           if seen == keyword {

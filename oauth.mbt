@@ -155,8 +155,22 @@ async fn post_form(
   )
   headers.set(@http.CaseInsensitiveString("Accept"), "application/json")
   let body = form_encode(pairs)
-  let (response, data) = @http.post(url, body, headers~) catch {
+  // A fixed content length keeps proxies happy; without it async sends the
+  // body chunked.
+  headers.set(
+    @http.CaseInsensitiveString("Content-Length"),
+    string_to_bytes(body).length().to_string(),
+  )
+  // Without a timeout a stuck token endpoint would hang startup and `mails
+  // check` forever.
+  let outcome = @async.with_timeout_opt(30_000, () => {
+    @http.post(url, body, headers~)
+  }) catch {
     err => raise MailsError("cannot reach " + url + ": " + err.to_string())
+  }
+  let (response, data) = match outcome {
+    Some(pair) => pair
+    None => raise MailsError("timed out after 30s waiting for " + url)
   }
   let text = data.text() catch {
     _ => raise MailsError("cannot read the response from " + url)

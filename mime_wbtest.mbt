@@ -181,3 +181,48 @@ test "base64 gb2312 body decodes" {
   let message = build_message("INBOX", "4", 60, header, body)
   assert_eq(message.body, "你好，世界")
 }
+
+///|
+/// Chinese providers often leave the charset out of the MIME headers and only
+/// declare it in the HTML, which used to decode as UTF-8 mojibake.
+test "reads the charset from an html meta tag when the header omits it" {
+  let gbk = match @moon_encoding.encode("你好，世界", "gbk") {
+    Ok(bytes) => bytes
+    Err(_) => abort("gbk encoder missing")
+  }
+  let out : Array[Byte] = []
+  for
+    byte in @utf8.encode(
+      "Content-Type: text/html\r\n\r\n<html><head><meta charset=\"gb2312\"></head><body>",
+    ) {
+    out.push(byte)
+  }
+  for byte in gbk {
+    out.push(byte)
+  }
+  for byte in @utf8.encode("</body></html>") {
+    out.push(byte)
+  }
+  assert_eq(message_body_text(Bytes::from_array(out[:])), "你好，世界")
+}
+
+///|
+test "ignores a charset mention outside a meta tag" {
+  let raw = "Content-Type: text/html\r\n\r\n" +
+    "<p>ask about charset=gb2312 in a ticket</p>"
+  assert_eq(
+    message_body_text(string_to_bytes(raw)),
+    "ask about charset=gb2312 in a ticket",
+  )
+}
+
+///|
+/// `has_prefix("<p")` used to also match `<param>` and `<picture>`, adding
+/// line breaks the message does not have.
+test "does not break lines on tags that merely start with a break tag name" {
+  let raw = "Content-Type: text/html; charset=utf-8\r\n\r\n" +
+    "<para>alpha</para><param name=x><picture><source src=x></picture>" +
+    "<link rel=x><option>opt</option>"
+  let text = message_body_text(string_to_bytes(raw))
+  assert_eq(text, "alphaopt")
+}

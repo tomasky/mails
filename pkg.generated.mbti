@@ -108,6 +108,10 @@ pub fn parse_match_field(String) -> MatchField?
 
 pub async fn poll_device_token(OAuthSettings, DeviceAuthorization, () -> Unit) -> TokenSet raise MailsError
 
+pub fn raw_placeholder_advice(String) -> String
+
+pub fn raw_placeholders(String) -> Array[String]
+
 pub async fn refresh_access_token(OAuthSettings, String) -> TokenSet raise MailsError
 
 pub fn render_env_for_display(EnvFile, Bool) -> String
@@ -147,6 +151,8 @@ pub fn string_to_bytes(String) -> Bytes
 pub fn token_path(Account, String) -> String
 
 pub fn trim(StringView) -> String
+
+pub fn truncate_bytes(String, Int32) -> String
 
 pub fn truncate_chars(String, Int32) -> String
 
@@ -283,6 +289,7 @@ pub struct ImapReply {
 type ImapStream
 
 pub enum LogLevel {
+  Quiet
   Warn
   Info
   Debug
