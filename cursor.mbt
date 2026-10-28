@@ -28,6 +28,35 @@ fn cursor_safe_name(name : String) -> String {
 }
 
 ///|
+/// FNV-1a over the account and mailbox name.
+///
+/// The readable part of the file name replaces every unusual character with
+/// `_`, so `Sent Items` and `Sent/Items` would otherwise share one cursor file.
+/// A short digest of the original names keeps them apart.
+fn cursor_suffix(account_name : String, mailbox : String) -> String {
+  let mut hash : UInt32 = 2166136261U
+  for byte in string_to_bytes(account_name) {
+    hash = (hash ^ byte.to_int().reinterpret_as_uint()) * 16777619U
+  }
+  // Separator, so ("ab", "c") and ("a", "bc") hash differently.
+  hash = (hash ^ 31U) * 16777619U
+  for byte in string_to_bytes(mailbox) {
+    hash = (hash ^ byte.to_int().reinterpret_as_uint()) * 16777619U
+  }
+  let digits : Array[Char] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+  ]
+  let out = StringBuilder()
+  let mut shift = 28
+  while shift >= 0 {
+    let nibble = ((hash >> shift) & 0xFU).reinterpret_as_int()
+    out.write_char(digits[nibble])
+    shift = shift - 4
+  }
+  out.to_string()
+}
+
+///|
 /// Path of the cursor file for one account and mailbox.
 pub fn cursor_path(
   config_dir : String,
@@ -39,6 +68,8 @@ pub fn cursor_path(
   cursor_safe_name(account_name) +
   "." +
   cursor_safe_name(mailbox) +
+  "." +
+  cursor_suffix(account_name, mailbox) +
   ".cursor"
 }
 

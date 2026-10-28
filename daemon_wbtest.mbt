@@ -73,6 +73,9 @@ struct FakeImap {
   mut fetches : Int32
   /// Whether the "new mail" that wakes an `IDLE` up has already been pushed.
   mut delivered : Bool
+  /// Drop the connection instead of answering this FETCH, to model a link that
+  /// dies mid-scan. `0` disables it.
+  mut drop_at_fetch : Int32
 }
 
 ///|
@@ -154,6 +157,11 @@ async fn fake_imap_serve(tcp : @socket.Tcp, state : FakeImap) -> Unit {
       )
     } else if upper.has_prefix("UID FETCH") {
       state.fetches = state.fetches + 1
+      if state.drop_at_fetch != 0 && state.fetches >= state.drop_at_fetch {
+        // The link died halfway through the scan.
+        tcp.close()
+        return
+      }
       let mut uid = "0"
       let mut index = 0
       for piece in command.split(" ") {
@@ -297,7 +305,7 @@ async fn fake_imap_start() -> FakeImapServer {
   {
     server,
     port: server.addr.port(),
-    state: { fetches: 0, delivered: false, },
+    state: { fetches: 0, delivered: false, drop_at_fetch: 0, },
   }
 }
 
@@ -352,6 +360,9 @@ async fn fixture_session(
 /// that arrives while watching has to reach the command as readable text rather
 /// than mojibake.
 async test "a reconnect does not replay mail that was already handled" {
+  // The scripted server drives the real watch loop, so keep its logs out of
+  // the test output.
+  set_log_level(Quiet)
   let dir = @fs.tmpdir(prefix="mails_daemon_wbtest")
   let hits = dir + "/hits"
   let rules = [fixture_rule(hits)]
@@ -389,6 +400,7 @@ async test "a reconnect does not replay mail that was already handled" {
 /// reconnect used to scan the whole mailbox again. Only the first connection of
 /// the process may do that.
 async test "a reconnecting startup_sync run does not rescan the mailbox" {
+  set_log_level(Quiet)
   let dir = @fs.tmpdir(prefix="mails_daemon_wbtest")
   let hits = dir + "/hits"
   let rules = [fixture_rule(hits)]
@@ -402,6 +414,40 @@ async test "a reconnecting startup_sync run does not rescan the mailbox" {
     assert_eq(fx.state.fetches, 3)
     ignore(fixture_session(fx, dir, rules, false, true, first_connection))
     assert_eq(fx.state.fetches, 3)
+  })
+  fx.server.close()
+}
+
+///|
+/// A link that dies in the middle of a scan must not be mistaken for "the rest
+/// of the mailbox was handled": the reconnect has to fetch the message that
+/// failed, and the cursor has to stop at the last one that really ran.
+async test "a scan that dies halfway resumes at the message that failed" {
+  set_log_level(Quiet)
+  let dir = @fs.tmpdir(prefix="mails_daemon_wbtest")
+  let hits = dir + "/hits"
+  let rules = [fixture_rule(hits)]
+  let fx = fake_imap_start()
+  @async.with_task_group(group => {
+    group.spawn_bg(() => fake_imap_accept(fx, 2))
+    let first_connection : Ref[Bool] = Ref(true)
+    // `startup_sync` makes the first session scan uids 1, 2 and 3; the link
+    // dies while the second message is being fetched.
+    fx.state.drop_at_fetch = 2
+    let dropped = fixture_session(fx, dir, rules, false, true, first_connection)
+    assert_eq(dropped, true)
+    // Only uid 1 was handled, so the cursor must stop there.
+    assert_eq(load_cursor(dir, "agt", "INBOX"), (fixture_uid_validity, 1))
+    assert_eq(first_connection.val, false)
+    let handled = fixture_hits_text(hits)
+    assert_eq(handled, "payment due\n")
+    // The reconnect picks up at uid 2 instead of rescanning from the start.
+    fx.state.drop_at_fetch = 0
+    ignore(fixture_session(fx, dir, rules, false, true, first_connection))
+    assert_eq(
+      fixture_hits_text(hits),
+      "payment due\n" + "payment due\n" + "你好\n",
+    )
   })
   fx.server.close()
 }

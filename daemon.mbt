@@ -64,6 +64,8 @@ async fn sync_mailbox(
   client : ImapClient,
   mailbox : String,
   last_uid : Int32,
+  uid_validity : Int32,
+  first_connection : Ref[Bool],
 ) -> Int32 {
   let from_uid = if last_uid < 0 { 1 } else { last_uid + 1 }
   let uids = client.search_uids(from_uid)
@@ -102,24 +104,50 @@ async fn sync_mailbox(
     index = index + 1
   }
   log_debug("processing " + ordered.length().to_string() + " new messages")
+  let mut fetch_error : Error? = None
   for uid in ordered {
     let uid_text = uid.to_string()
     let fetched = client.fetch_message(uid_text, runtime.account.max_body_bytes) catch {
       err => {
+        // A dropped connection is not "this mail is gone": stop the scan so the
+        // reconnect retries from the last cursor. Advancing past a message that
+        // was never handled would silently lose it.
         log_warn("cannot fetch uid " + uid_text + ": " + err.to_string())
+        fetch_error = Some(err)
         None
       }
+    }
+    if fetch_error is Some(_) {
+      break
     }
     match fetched {
       Some(message) =>
         handle_message(runtime, mailbox, message) catch {
           err => log_error("uid " + uid_text + " failed: " + err.to_string())
         }
+      // The server answered but has no such message any more.
       None => log_warn("uid " + uid_text + " is no longer available")
     }
     if uid > highest {
       highest = uid
     }
+    // Save after every message, not just at the end of the scan: a crash or a
+    // dropped connection halfway through must not replay the mail that was
+    // already handled.
+    save_cursor(
+      runtime.config_dir,
+      runtime.account.name,
+      mailbox,
+      uid_validity,
+      highest,
+    )
+    // From the first handled message on, a reconnect resumes from the cursor
+    // instead of replaying the mailbox, even with `startup_sync = true`.
+    first_connection.val = false
+  }
+  match fetch_error {
+    Some(err) => raise err
+    None => ()
   }
   highest
 }
@@ -235,7 +263,16 @@ async fn watch_connected(
     last_uid.to_string() +
     ")",
   )
-  last_uid = sync_mailbox(runtime, client, mailbox, last_uid)
+  last_uid = sync_mailbox(
+    runtime,
+    client,
+    mailbox,
+    last_uid,
+    status.uid_validity,
+    first_connection,
+  )
+  // Nothing matched (or the mailbox is empty), but the scan itself is done:
+  // record it so a reconnect starts from here.
   save_cursor(
     runtime.config_dir,
     account.name,
@@ -243,8 +280,6 @@ async fn watch_connected(
     status.uid_validity,
     last_uid,
   )
-  // From here on the mailbox has a cursor, so a reconnect resumes from it
-  // rather than scanning again.
   first_connection.val = false
   if runtime.once {
     log_info("sync of " + mailbox + " finished")
@@ -279,13 +314,13 @@ async fn watch_connected(
     }
     status = next_status
     if changed || status.uid_next - 1 > last_uid {
-      last_uid = sync_mailbox(runtime, client, mailbox, last_uid)
-      save_cursor(
-        runtime.config_dir,
-        account.name,
+      last_uid = sync_mailbox(
+        runtime,
+        client,
         mailbox,
-        status.uid_validity,
         last_uid,
+        status.uid_validity,
+        first_connection,
       )
     }
   }
@@ -350,6 +385,38 @@ pub async fn run_watch(
   key : String,
   once : Bool,
 ) -> Unit {
+  // Warn once at startup: a command that interpolates message text into a
+  // shell lets any sender run commands.
+  let all_rules : Array[Rule] = []
+  for rule in config.rules {
+    all_rules.push(rule)
+  }
+  for account in accounts {
+    for rule in account.rules {
+      all_rules.push(rule)
+    }
+  }
+  for rule in all_rules {
+    if rule.shell_command == "" {
+      continue
+    }
+    let risky = raw_placeholders(rule.shell_command)
+    if risky.length() > 0 {
+      let advice : Array[String] = []
+      for name in risky {
+        advice.push(raw_placeholder_advice(name))
+      }
+      log_warn(
+        "rule '" +
+        rule.name +
+        "' inserts " +
+        risky.join(", ") +
+        " raw into a shell command, so a sender can run a command through it; " +
+        "use " +
+        advice.join(" or "),
+      )
+    }
+  }
   let failed : Ref[Bool] = Ref(false)
   @async.with_task_group(group => {
     for account in accounts {

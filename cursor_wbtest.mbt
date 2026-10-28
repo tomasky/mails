@@ -65,3 +65,28 @@ async test "a cursor saved twice keeps only the newest values" {
   save_cursor(dir, "agt", "INBOX", 7, 5)
   assert_eq(load_cursor(dir, "agt", "INBOX"), (7, 5))
 }
+
+///|
+/// Sanitising the file name turns every unusual character into `_`, so two
+/// different mailboxes could land in the same file and overwrite each other's
+/// position.
+async test "mailboxes that sanitise to the same name get different cursors" {
+  let dir = @fs.tmpdir(prefix="mails_cursor_wbtest")
+  assert_true(
+    cursor_path(dir, "agt", "Sent Items") !=
+    cursor_path(dir, "agt", "Sent/Items"),
+  )
+  save_cursor(dir, "agt", "Sent Items", 11, 7)
+  save_cursor(dir, "agt", "Sent/Items", 11, 3)
+  assert_eq(load_cursor(dir, "agt", "Sent Items"), (11, 7))
+  assert_eq(load_cursor(dir, "agt", "Sent/Items"), (11, 3))
+}
+
+///|
+async test "accounts that sanitise to the same name get different cursors" {
+  let dir = @fs.tmpdir(prefix="mails_cursor_wbtest")
+  save_cursor(dir, "a.b", "INBOX", 11, 7)
+  save_cursor(dir, "a_b", "INBOX", 11, 3)
+  assert_eq(load_cursor(dir, "a.b", "INBOX"), (11, 7))
+  assert_eq(load_cursor(dir, "a_b", "INBOX"), (11, 3))
+}
