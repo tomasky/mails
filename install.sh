@@ -2,7 +2,7 @@
 # mails installer — https://github.com/tomasky/mails
 #
 #   curl -LsSf https://raw.githubusercontent.com/tomasky/mails/master/install.sh | bash
-#   curl -LsSf https://raw.githubusercontent.com/tomasky/mails/master/install.sh | bash -s -- --version 0.1.8
+#   curl -LsSf https://raw.githubusercontent.com/tomasky/mails/master/install.sh | bash -s -- --version 0.2.0
 #
 # Environment overrides:
 #   MAILS_VERSION        release version to install (default: latest)
@@ -25,7 +25,7 @@ Usage:
   install.sh [options]
 
 Options:
-  -v, --version <version>       install a specific version (e.g. 0.1.8)
+  -v, --version <version>       install a specific version (e.g. 0.2.0)
   -b, --install-dir <dir>       install into <dir> (default: ~/.local/bin)
       --no-verify               skip SHA-256 checksum verification
   -h, --help                    show this help

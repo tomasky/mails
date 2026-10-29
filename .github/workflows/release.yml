@@ -1,6 +1,6 @@
 name: Release
 
-# Tagging is the trigger: `git tag v0.1.8 && git push origin v0.1.8`.
+# Tagging is the trigger: `git tag v0.2.0 && git push origin v0.2.0`.
 # `workflow_dispatch` re-cuts a release without moving a tag.
 on:
   push:
@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to publish, e.g. v0.1.8 (defaults to the ref name)"
+        description: "Tag to publish, e.g. v0.2.0 (defaults to the ref name)"
         required: false
         type: string
 
@@ -64,6 +64,10 @@ jobs:
       # index is fetched.
       - name: Update registry index
         run: moon update
+
+      # One C stub in a dependency triggers -Wunused-result on a clean build.
+      - name: Patch dependency C stubs
+        run: ./scripts/patch-deps.sh
 
       - name: Build (static, release)
         if: matrix.musl

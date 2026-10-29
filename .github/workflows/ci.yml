@@ -32,6 +32,11 @@ jobs:
       - name: Update dependencies
         run: moon update
 
+      # One C stub in a dependency triggers -Wunused-result on every clean
+      # native build. This patches that line so the build output stays clean.
+      - name: Patch dependency C stubs
+        run: ./scripts/patch-deps.sh
+
       - name: Check version consistency
         run: |
           set -eu

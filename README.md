@@ -29,6 +29,9 @@ Everything is one static binary with no runtime dependencies.
 - **Encrypted passwords.** `mails.toml` stores an AES-256-GCM envelope, never
   the password. The key lives in `.env` and can be a random 32-byte secret or a
   PBKDF2-derived passphrase. See [Credentials](#credentials).
+- **Read and send, not just watch.** `mails ls` lists a mailbox, `mails read`
+  prints one message and `mails send` delivers a new one over SMTP, so a server
+  needs no extra client to look at or answer the mail that triggered a rule.
 - **A single static binary.** No Node.js, Python or libc version to worry about
   on Linux: the published binaries are linked against musl statically.
 - **Config beside the binary.** `mails.toml` and `.env` are resolved relative to
@@ -92,7 +95,7 @@ already develop with MoonBit.
 curl -LsSf https://raw.githubusercontent.com/tomasky/mails/master/install.sh | bash
 ```
 
-No Node.js or MoonBit required. The script accepts `--version 0.1.8`,
+No Node.js or MoonBit required. The script accepts `--version 0.2.0`,
 `--install-dir DIR` and `--no-verify`, and verifies the published SHA-256
 before installing. By default it installs into `~/.local/bin`.
 
@@ -137,7 +140,7 @@ See [Building](#building) for the static Linux build and tests.
 
 ## Releases
 
-Releases are tagged `v<version>` (for example `v0.1.8`). Each release publishes
+Releases are tagged `v<version>` (for example `v0.2.0`). Each release publishes
 one binary per target plus its `.sha256` checksum; there are no archives,
 because the installer, the npm launcher and `curl` all want the bare binary.
 Source archives are provided by GitHub for every tag.
@@ -168,9 +171,96 @@ mails check                # verify config, key and logins
 mails watch                # run in the foreground; use a supervisor in production
 ```
 
+Once it runs, the mailbox is reachable without a mail client:
+
+```sh
+mails ls                   # the newest 20 messages: UID, date, sender, subject
+mails read 42              # one message, headers and text body
+mails send --to you@example.com --subject test --body "hello"
+```
+
 If you would rather keep the config somewhere else, pass `--config PATH` or set
 `MAILS_CONFIG`. The `.env` file still defaults to the directory of the config
 file, and can be changed with `general.env_file`.
+
+## Reading and sending mail
+
+The same config and the same key are used for reading and sending, so there is
+nothing extra to install or authenticate.
+
+### `mails ls`
+
+```sh
+mails ls                      # newest 20 messages of the first mailbox
+mails ls --mailbox Archive -n 50
+mails ls --unread
+mails ls --json               # one JSON object per message, for scripts
+mails folders                 # the mailboxes on the server
+```
+
+```text
+UID  DATE              FROM                        SUBJECT
+3    2025-04-03 09:15  张三 <zhang@example.com>    * 中国层订
+2    2025-04-02 11:30  bob@example.com             Invoice 42
+1    2025-04-01 10:00  Alice <alice@example.com>   * 你好，一个测试
+```
+
+A `*` in front of the subject marks a message that is still unread. The listing
+fetches headers only (`Date`, `From`, `Subject`) with `BODY.PEEK`, so it never
+marks anything as read, and 50 UIDs per command keeps a large mailbox cheap.
+
+### `mails read`
+
+```sh
+mails read 42                 # headers and the decoded text body
+mails read 42 --full          # do not truncate the body at 4000 characters
+mails read 42 --raw           # exactly what the server sent, headers included
+mails read 42 --json
+mails read 42 --mailbox Sent
+```
+
+The body goes through the same MIME and charset handling as the watcher, so
+GBK/GB2312 mail prints as readable Chinese and `text/html`-only mail is stripped
+of its tags. Encoded-word subjects are decoded in both `ls` and `read`.
+
+### `mails send`
+
+```sh
+mails send --to you@example.com --subject "test" --body "hello"
+mails send --to a@example.com,b@example.com --cc c@example.com --subject hi --body-file body.txt
+printf 'line one\nline two\n' | mails send --to you@example.com --subject "from stdin"
+mails send --to you@example.com --subject "report" --body "see attached" --attach report.pdf
+mails send --to you@example.com --subject "html" --html --body "<p>hello</p>"
+```
+
+Without `--body`, the body is read from standard input. Recipients may be
+repeated, comma separated, semicolon separated, or written as
+`Name <address>`. `--bcc` recipients stay out of the headers, as they should.
+The message is built as RFC 5322 with a `Date` and a `Message-ID`, a UTF-8
+`Content-Type`, base64 transfer encoding and `multipart/mixed` when there are
+attachments. Delivery goes over SMTP with `STARTTLS` on port 587 or implicit TLS
+on 465, authenticating with `AUTH XOAUTH2`, `PLAIN` or `LOGIN` depending on what
+the server offers and whether the account uses a password or an OAuth2 token.
+
+Sending needs `smtp_host` on the account:
+
+```toml
+[accounts.work]
+host = "imap.example.com"
+port = 993
+username = "me@example.com"
+password = "enc:v1:..."
+smtp_host = "smtp.example.com"
+# smtp_port = 465            # default 465 (implicit TLS); 587 selects STARTTLS
+# smtp_tls = true            # default: port != 587
+# smtp_starttls = false      # default: port == 587
+# smtp_username = "me@example.com"   # default: username
+# smtp_tls_verify = true     # default: tls_verify
+```
+
+`From:` is the account's `username` (or `smtp_username`). An account without
+`smtp_host` still works for watching; only `send` refuses, with a pointer to
+this file.
 
 ## Configuration
 
@@ -529,6 +619,10 @@ mails <command> [options]
 watch       follow mailboxes with IMAP IDLE
 sync        process existing matching mail once, then exit
 check       verify config, key, logins and mailbox counts
+ls          list the newest messages of a mailbox
+read        print one message (UID is required)
+folders     list the mailboxes on the server
+send        send a message over SMTP
 encrypt     seal an account password with the key in .env
 keygen      create or rotate the encryption key in .env
 rules       list configured rules
@@ -549,6 +643,18 @@ Options:
 | `--new-key` | For `encrypt`: rotate the key before sealing |
 | `-v, --verbose` | Debug logging |
 | `-q, --quiet` | Warnings and errors only |
+| `-m, --mailbox NAME` | For `ls`, `read`, `send`: mailbox to read (default: the account's first) |
+| `-n, --limit N` | For `ls`: how many messages (default 20) |
+| `-u, --unread` | For `ls`: unread messages only |
+| `--json` | For `ls`, `read`: machine-readable output |
+| `--full` | For `read`: do not truncate the body |
+| `--raw` | For `read`: the message exactly as stored |
+| `-t, --to ADDR` | For `send`: recipient; repeatable or comma separated |
+| `--cc ADDR`, `--bcc ADDR` | For `send`: more recipients |
+| `-s, --subject TEXT` | For `send`: subject |
+| `-b, --body TEXT`, `--body-file F` | For `send`: body; default is standard input |
+| `--html` | For `send`: the body is HTML |
+| `--attach FILE` | For `send`: attach a file; repeatable |
 
 ## Environment variables
 
@@ -667,6 +773,14 @@ moon check --target native --deny-warn
 moon fmt --check
 ```
 
+A clean build also compiles the C stubs of the dependencies, and one of them
+(`moonbitlang/async`'s thread-pool self-pipe) calls `write` without checking the
+result, which GCC flags with `-Wunused-result`. `scripts/patch-deps.sh` silences
+exactly that line so the build output holds nothing but our own diagnostics; CI
+and the static build script run it after `moon update`. It is idempotent and
+changes no behaviour: a failed write there only means the event loop wakes up
+spuriously, which it already handles.
+
 ### Static Linux build
 
 `scripts/build-linux-static.sh` is what the release workflow uses. A glibc
@@ -708,9 +822,14 @@ directly instead of resolving them at runtime.
 
 ## Limitations
 
-- **IMAP only.** JMAP and POP3 are not implemented. Authentication is `LOGIN`
-  or `AUTHENTICATE XOAUTH2` (both with TLS); see
+- **IMAP and SMTP only.** JMAP and POP3 are not implemented. IMAP
+  authentication is `LOGIN` or `AUTHENTICATE XOAUTH2`, always with TLS; see
   [Providers that require OAuth2](#providers-that-require-oauth2).
+- **`send` does not queue or retry.** It connects, delivers and exits; SMTP
+  refusal is reported with the server's status code, and a refused recipient
+  fails the command after the others have been tried.
+- **`send` has no reply/history tracking.** It writes no copy to `Sent`: use
+  `--bcc your-own-address`, or let your provider's SMTP do it if it does.
 - **OAuth2 needs a one-time `mails login`.** The device code flow refreshes
   the access token automatically afterwards, but a revoked or expired refresh
   token has to be replaced by running `mails login` again.

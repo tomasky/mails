@@ -17,4 +17,8 @@ import {
   "cc06b/mooncry/lib",
 }
 
+options(
+  "native-stub": [ "time_stub.c" ],
+)
+
 supported_targets = "+native"

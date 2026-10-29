@@ -2,6 +2,8 @@
 package "kupas/mails"
 
 import {
+  "moonbitlang/async/socket",
+  "moonbitlang/async/tls",
   "moonbitlang/core/ref",
 }
 
@@ -9,6 +11,8 @@ import {
 pub async fn access_token_for(Account, String, String) -> String raise MailsError
 
 pub fn action_env(ActionContext) -> Map[String, String]
+
+pub fn base64_body(Bytes) -> String
 
 pub fn base64_decode(String) -> Bytes raise MailsError
 
@@ -19,6 +23,8 @@ pub fn build_message(String, String, Int32, Bytes, Bytes) -> MailMessage
 pub fn bytes_concat(ArrayView[Bytes]) -> Bytes
 
 pub fn bytes_to_string_lossy(Bytes) -> String
+
+pub fn choose_smtp_auth(Array[String], String, String, String?) -> SmtpAuth
 
 pub fn collapse_whitespace(String) -> String
 
@@ -40,15 +46,29 @@ pub fn default_defaults() -> Defaults
 
 pub let default_key_env : String
 
+pub fn dot_stuff_bytes(Bytes) -> Bytes
+
+pub fn draft_recipients(Draft) -> Array[String]
+
+pub fn encode_header_text(String) -> String
+
+pub fn envelope_table_header(Int32, Int32, Int32) -> String
+
+pub fn envelope_table_row(Envelope, Int32, Int32, Int32) -> String
+
 pub fn error_message(Error) -> String
 
 pub async fn executable_dir() -> String raise MailsError
+
+pub fn fit_width(String, Int32) -> String
 
 pub fn forget_access_token(String) -> Unit
 
 pub fn format_duration(Int32) -> String
 
 pub async fn generate_key_spec() -> String raise MailsError
+
+pub fn guess_mime_type(String) -> String
 
 pub fn imap_quote(String) -> String
 
@@ -80,6 +100,8 @@ pub fn mails_error(String) -> MailsError
 
 pub async fn main_cli() -> Bool
 
+pub fn make_message_id(String, Int64, String) -> String
+
 pub fn match_rule(Rule, MailMessage) -> RuleMatch?
 
 pub fn match_rules(Array[Rule], String, String, MailMessage) -> Array[RuleMatch]
@@ -96,13 +118,19 @@ pub fn oauth_settings_for(Account, String) -> OAuthSettings raise MailsError
 
 pub fn open_secret(String, String) -> String raise MailsError
 
+pub fn pad_to(String, Int32) -> String
+
 pub fn parse_config(String, String) -> Config raise MailsError
 
 pub fn parse_content_type(String) -> (String, Array[(String, String)])
 
 pub fn parse_duration_ms(String) -> Int32?
 
+pub fn parse_header_fetch(LogicalLine) -> Envelope?
+
 pub fn parse_headers(String) -> Array[(String, String)]
+
+pub fn parse_list_line(String) -> Folder?
 
 pub fn parse_match_field(String) -> MatchField?
 
@@ -116,11 +144,17 @@ pub async fn refresh_access_token(OAuthSettings, String) -> TokenSet raise Mails
 
 pub fn render_env_for_display(EnvFile, Bool) -> String
 
+pub fn render_envelope_table(Array[Envelope]) -> String
+
+pub fn render_outgoing_message(Draft, Int64, String) -> String
+
 pub fn render_template(String, ActionContext) -> String
 
 pub async fn request_device_code(OAuthSettings) -> DeviceAuthorization raise MailsError
 
 pub fn resolve_secret(String, String) -> String raise MailsError
+
+pub fn rfc5322_date(Int64) -> String
 
 pub fn rule_applies(Rule, String, String) -> Bool
 
@@ -144,6 +178,14 @@ pub fn set_log_level(LogLevel) -> Unit
 
 pub fn shell_quote(String) -> String
 
+pub fn short_date(String) -> String
+
+pub fn smtp_has_capability(Array[String], String) -> Bool
+
+pub fn smtp_plain_response(String, String) -> String
+
+pub fn split_addresses(String) -> Array[String] raise
+
 pub fn split_header_body(Bytes) -> (Array[(String, String)], Bytes)
 
 pub fn string_to_bytes(String) -> Bytes
@@ -157,6 +199,8 @@ pub fn truncate_bytes(String, Int32) -> String
 pub fn truncate_chars(String, Int32) -> String
 
 pub fn update_account_password(String, String, String) -> String raise MailsError
+
+pub fn validate_address(String) -> String raise
 
 pub fn xoauth2_initial_response(String, String) -> String
 
@@ -188,6 +232,12 @@ pub struct Account {
   oauth_device_endpoint : String
   oauth_token_endpoint : String
   oauth_token_file : String
+  smtp_host : String
+  smtp_port : Int32
+  smtp_tls : Bool
+  smtp_starttls : Bool
+  smtp_username : String
+  smtp_tls_verify : Bool
   mailboxes : Array[String]
   rules : Array[Rule]
   startup_sync : Bool
@@ -207,6 +257,12 @@ pub struct ActionContext {
 pub struct ActionOutcome {
   exit_code : Int32
   timed_out : Bool
+}
+
+pub struct Attachment {
+  name : String
+  mime : String
+  data : Bytes
 }
 
 pub enum AuthKind {
@@ -248,6 +304,17 @@ pub struct DeviceAuthorization {
   message : String
 }
 
+pub struct Draft {
+  from : String
+  to : Array[String]
+  cc : Array[String]
+  bcc : Array[String]
+  subject : String
+  body : String
+  html : Bool
+  attachments : Array[Attachment]
+}
+
 pub struct EnvFile {
   path : String
   keys : Array[String]
@@ -255,11 +322,27 @@ pub struct EnvFile {
 }
 pub fn EnvFile::get(Self, String) -> String?
 
+pub struct Envelope {
+  uid : String
+  date : String
+  from : String
+  subject : String
+  size : Int32
+  seen : Bool
+  flagged : Bool
+}
+
 pub struct FetchedMessage {
   uid : String
   size : Int32
   header : Bytes
   body : Bytes
+}
+
+pub struct Folder {
+  name : String
+  delimiter : String
+  attributes : Array[String]
 }
 
 pub struct ImapClient {
@@ -274,9 +357,12 @@ pub async fn ImapClient::close(Self) -> Unit
 pub async fn ImapClient::connect(String, Int32, Bool, Bool, String, String) -> Self
 pub async fn ImapClient::connect_with(String, Int32, Bool, Bool, String, Credential) -> Self
 pub async fn ImapClient::fetch_message(Self, String, Int32) -> FetchedMessage?
+pub async fn ImapClient::fetch_raw(Self, String) -> Bytes?
 pub fn ImapClient::has_capability(Self, String) -> Bool
 pub async fn ImapClient::highest_uid(Self) -> Int32
 pub async fn ImapClient::idle(Self, Int32) -> Bool
+pub async fn ImapClient::list_envelopes(Self, Int32, Bool) -> Array[Envelope]
+pub async fn ImapClient::list_folders(Self) -> Array[Folder]
 pub async fn ImapClient::search_uids(Self, Int32) -> Array[String]
 pub async fn ImapClient::select_mailbox(Self, String) -> MailboxStatus
 
@@ -311,6 +397,24 @@ pub struct MailMessage {
   message_id : String
   body : String
   raw_bytes : Int32
+}
+
+pub struct MailOptions {
+  mut mailbox : String
+  mut limit : Int32
+  mut unread_only : Bool
+  mut folders : Bool
+  mut json : Bool
+  to : Array[String]
+  cc : Array[String]
+  bcc : Array[String]
+  mut subject : String
+  mut body : String?
+  mut body_file : String?
+  mut html : Bool
+  attach : Array[String]
+  mut full : Bool
+  mut raw : Bool
 }
 
 pub struct MailboxStatus {
@@ -371,6 +475,38 @@ pub struct Runtime {
   key : String
   once : Bool
   failed : @ref.Ref[Bool]
+}
+
+pub enum SmtpAuth {
+  SmtpAuthNone
+  SmtpAuthPlain(String, String)
+  SmtpAuthLogin(String, String)
+  SmtpAuthXoauth2(String, String)
+}
+
+pub struct SmtpClient {
+  stream : SmtpStream
+  host : String
+  capabilities : Array[String]
+}
+pub async fn SmtpClient::authenticate(Self, SmtpAuth) -> Unit
+pub async fn SmtpClient::close(Self) -> Unit
+pub async fn SmtpClient::connect(String, Int32, Bool, Bool, Bool) -> Self
+pub async fn SmtpClient::send(Self, SmtpEnvelope, Bytes) -> Unit
+
+pub struct SmtpEnvelope {
+  from : String
+  to : Array[String]
+}
+
+pub struct SmtpReply {
+  code : Int32
+  lines : Array[String]
+}
+
+pub enum SmtpStream {
+  SmtpPlain(@socket.Tcp)
+  SmtpSecure(@tls.Tls)
 }
 
 pub struct TokenSet {

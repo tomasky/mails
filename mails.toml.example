@@ -103,6 +103,22 @@ password = ""
 mailboxes = ["INBOX"]
 tls = true
 tls_verify = true
+# SMTP, used by `mails send`. Port 465 means implicit TLS, port 587 means
+# STARTTLS; set tls/starttls by hand if your server is unusual.
+#   Gmail / Workspace   smtp.gmail.com          465 / 587
+#   Outlook / M365      smtp.office365.com      587  (or "smtp-mail.outlook.com")
+#   Yahoo               smtp.mail.yahoo.com     465
+#   iCloud              smtp.mail.me.com        587
+#   Fastmail            smtp.fastmail.com       465
+#   Proton (Bridge)     127.0.0.1 port 1025
+#   Zoho                smtp.zoho.com           465
+#   GMX                 mail.gmx.com            587
+# smtp_host = "smtp.example.com"
+# smtp_port = 465
+# smtp_tls = true          # default: port != 587
+# smtp_starttls = false    # default: port == 587
+# smtp_username = "me@example.com"   # default: username
+# smtp_tls_verify = true             # default: tls_verify
 # Per-account overrides of [general]:
 # startup_sync = true
 # idle_timeout = "10m"

@@ -70,6 +70,13 @@ pub struct Account {
   oauth_device_endpoint : String
   oauth_token_endpoint : String
   oauth_token_file : String
+  /// SMTP settings for `mails send`. Empty `smtp_host` disables sending.
+  smtp_host : String
+  smtp_port : Int32
+  smtp_tls : Bool
+  smtp_starttls : Bool
+  smtp_username : String
+  smtp_tls_verify : Bool
   mailboxes : Array[String]
   rules : Array[Rule]
   startup_sync : Bool
@@ -617,6 +624,40 @@ fn parse_account(
     Some(ms) => ms
     None => defaults.reconnect_ms
   }
+  let smtp_host = match read_string(table, "smtp_host", what + "smtp_host") {
+    Some(text) => trim(text)
+    None => ""
+  }
+  let smtp_port = match read_int(table, "smtp_port", what + "smtp_port") {
+    Some(number) => {
+      if number <= 0 || number > 65535 {
+        raise MailsError(what + "smtp_port must be between 1 and 65535")
+      }
+      number
+    }
+    None => 465
+  }
+  let smtp_tls = match read_bool(table, "smtp_tls", what + "smtp_tls") {
+    Some(flag) => flag
+    // Port 587 speaks plaintext first and upgrades with STARTTLS; every other
+    // port carries TLS from the first byte.
+    None => smtp_port != 587
+  }
+  let smtp_starttls = match
+    read_bool(table, "smtp_starttls", what + "smtp_starttls") {
+    Some(flag) => flag
+    None => smtp_port == 587
+  }
+  let smtp_username = match
+    read_string(table, "smtp_username", what + "smtp_username") {
+    Some(text) if !is_blank(text) => trim(text)
+    _ => username
+  }
+  let smtp_tls_verify = match
+    read_bool(table, "smtp_tls_verify", what + "smtp_tls_verify") {
+    Some(flag) => flag
+    None => tls_verify
+  }
   let max_body_bytes = match
     read_int(table, "max_body_bytes", what + "max_body_bytes") {
     Some(number) => {
@@ -722,6 +763,12 @@ fn parse_account(
     oauth_device_endpoint,
     oauth_token_endpoint,
     oauth_token_file,
+    smtp_host,
+    smtp_port,
+    smtp_tls,
+    smtp_starttls,
+    smtp_username,
+    smtp_tls_verify,
     mailboxes,
     rules,
     startup_sync,

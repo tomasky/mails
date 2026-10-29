@@ -227,6 +227,8 @@ cd "$root"
 # dependency bootstrap above, or a previous glibc build, would otherwise leave
 # objects that must not be reused for a musl static link.
 rm -rf "$root/_build/native"
+# A dependency's C stub warns about an ignored write(2) result; see the script.
+"$root/scripts/patch-deps.sh" >/dev/null
 MOON_CC="$work/mails-musl-gcc" MOON_AR=ar \
   moon build --target native --release
 

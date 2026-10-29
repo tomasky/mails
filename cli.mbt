@@ -1,7 +1,7 @@
 ///| The `mails` command-line interface.
 
 ///|
-let cli_version : String = "0.1.8"
+let cli_version : String = "0.2.0"
 
 ///|
 priv struct CliOptions {
@@ -13,6 +13,9 @@ priv struct CliOptions {
   mut once : Bool
   mut no_verify : Bool
   mut help : Bool
+  /// Arguments the command itself understands: `ls`, `read` and `send` parse
+  /// them with `parse_mail_options`. Every other command rejects them.
+  extra : Array[String]
 }
 
 ///|
@@ -25,6 +28,7 @@ fn default_options() -> CliOptions {
     new_key: false,
     once: false,
     no_verify: false,
+    extra: [],
     help: false,
   }
 }
@@ -78,12 +82,21 @@ fn parse_args(argv : Array[String]) -> CliOptions raise {
       set_log_level(Debug)
     } else if arg == "--quiet" || arg == "-q" {
       set_log_level(Warn)
-    } else if arg.has_prefix("-") && opts.command == "" {
-      raise cli_error("unknown option " + arg)
+    } else if (
+        arg == "ls" ||
+        arg == "read" ||
+        arg == "send" ||
+        arg == "folders" ||
+        arg == "mailboxes"
+      ) &&
+      opts.command == "" {
+      opts.command = arg
     } else if opts.command == "" {
       opts.command = arg
     } else {
-      raise cli_error("unexpected argument '" + arg + "'")
+      // `ls`, `read` and `send` take their own flags; everything else rejects
+      // them in `dispatch`.
+      opts.extra.push(arg)
     }
     index = index + 1
   }
@@ -101,6 +114,10 @@ async fn print_help() -> Unit {
     "",
     "commands:",
     "  watch              follow mailboxes with IMAP IDLE",
+    "  ls                 list the newest mail in a mailbox",
+    "  read <uid>         print one message",
+    "  folders            list the mailboxes on the server",
+    "  send               send a message over SMTP",
     "  sync               process existing matching mail once, then exit",
     "  check              verify the config, key and IMAP logins",
     "  login              sign in to an OAuth2 account (device code, no browser)",
@@ -118,6 +135,21 @@ async fn print_help() -> Unit {
     "      --once         for watch: process existing mail, then exit",
     "      --write        for encrypt: update mails.toml in place",
     "      --new-key      for encrypt: rotate the key before sealing",
+    "",
+    "ls / read / send options:",
+    "  -m, --mailbox NAME mailbox to read (default: the account's first one)",
+    "  -n, --limit N      how many messages to list (default: 20)",
+    "  -u, --unread       only unread messages",
+    "      --json         machine-readable output",
+    "      --full         read: do not truncate the body at 4000 characters",
+    "      --raw          read: print the raw message, headers included",
+    "  -t, --to ADDR      send: recipient, repeatable or comma separated",
+    "      --cc / --bcc   send: more recipients",
+    "  -s, --subject TEXT send: subject",
+    "  -b, --body TEXT    send: body; without it the body is read from stdin",
+    "      --body-file F  send: read the body from a file",
+    "      --html         send: treat the body as HTML",
+    "      --attach FILE  send: attach a file",
     "  -v, --verbose      debug logging",
     "  -q, --quiet        warnings and errors only",
     "",
@@ -635,6 +667,17 @@ async fn dispatch(opts : CliOptions) -> Unit {
     print_help()
     return
   }
+  // Only the mail commands define their own flags; a stray argument anywhere
+  // else is a typo that must not be ignored.
+  match opts.command {
+    "ls" | "folders" | "mailboxes" | "read" | "send" => ()
+    _ =>
+      if opts.extra.length() > 0 {
+        raise cli_error(
+          "unknown option '" + opts.extra[0] + "'; try `mails help`",
+        )
+      }
+  }
   match opts.command {
     "" | "help" => print_help()
     "watch" => cmd_watch(opts)
@@ -649,9 +692,51 @@ async fn dispatch(opts : CliOptions) -> Unit {
     "rules" => cmd_rules(opts)
     "env" => cmd_env(opts)
     "init" => cmd_init(opts)
+    "ls" => {
+      let (mail, positionals) = parse_mail_options(opts.extra) catch {
+        err => raise cli_error(error_message(err))
+      }
+      if positionals.length() > 0 {
+        raise cli_error("ls takes no arguments, got '" + positionals[0] + "'")
+      }
+      cmd_ls(opts, mail)
+    }
+    "folders" | "mailboxes" => {
+      let (mail, positionals) = parse_mail_options(opts.extra) catch {
+        err => raise cli_error(error_message(err))
+      }
+      if positionals.length() > 0 {
+        raise cli_error("folders takes no arguments")
+      }
+      cmd_ls(opts, { ..mail, folders: true, })
+    }
+    "read" => {
+      let (mail, positionals) = parse_mail_options(opts.extra) catch {
+        err => raise cli_error(error_message(err))
+      }
+      if positionals.length() != 1 {
+        raise cli_error("usage: mails read <uid> [--mailbox INBOX]")
+      }
+      cmd_read(opts, mail, positionals[0])
+    }
+    "send" => {
+      let (mail, positionals) = parse_mail_options(opts.extra) catch {
+        err => raise cli_error(error_message(err))
+      }
+      if positionals.length() > 0 {
+        raise cli_error(
+          "send takes no arguments; use --to, --subject and --body",
+        )
+      }
+      cmd_send(opts, mail)
+    }
     "version" | "--version" => cmd_version()
-    other =>
+    other => {
+      if opts.extra.length() > 0 {
+        raise cli_error("unexpected argument '" + opts.extra[0] + "'")
+      }
       raise cli_error("unknown command '" + other + "'; try `mails help`")
+    }
   }
 }
 
